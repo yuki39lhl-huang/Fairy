@@ -53,13 +53,13 @@
 - **配置项**：语音自动播放开关、存文件到本地开关（Config.vue）
 - 详见根目录 `语音通话.md`（whisper-node → whisper-cli 决策记录）
 
-### ✅ 阶段5：Live2D动态角色交互（主体完成，产品核心卖点）
-- **渲染（已切换）**：Fairy 不是人形 Live2D，而是 HDD 电子眼分层图。`FairyEyeCanvas`（PixiJS 8）叠放 `public/fairy/layers/`：`background` → `blue_glow` → `outer_ring` → `core` → `white_ring`（瞳孔画在白环层内）。旧 Hiyori `Live2dCanvas` 保留作参考，通话窗已改用电子眼。
-- **口型同步**：`BroadcastChannel('fairy-mouth-sync')` → 白环/光晕 scale+alpha 脉冲
-- **待机扫视**：`idleScanController` + `gazeFocusController`（白环/核心平移模拟注视；外环视差更小）
-- **情绪微反应**：`[emotion:xxx]` → AG-UI → 注视偏置 + 脉冲强度 + 外环闪/轻转（normal/caring/smug/teasing/alert）
-- **资源来源**：根目录 `image/layers/`（ComfyUI 分层管线）；`icon` 层是设计稿右下角静音钮，通话窗暂不叠（自有麦克风按钮）
-- **待完善**：把瞳孔从 `white_ring` 再拆成独立层以做更细腻扫视；接入 `docs/idle-dialogues/hdd-idle.md` 待机台词；TTS 路径配置化
+### ✅ 阶段5：Fairy HDD 动态角色交互（主体完成，产品核心卖点）
+- **渲染对象**：Fairy 是 HDD 电子眼，不套用人形 Live2D 的眉眼或口型概念。通话页使用 `FairyEyeCanvas`（PixiJS 8）；旧 Hiyori `Live2dCanvas` 仅留作技术参考。
+- **可靠资源管线**：`live2d-fairy/build_fairy_layers_v4.py` 从无球源图确定性切出 `public/fairy/layers_v4/`。每层 RGBA 且含透明像素；不再用 ComfyUI 生成运行时图层。
+- **固定分层契约**：不加载 L1；L2 仅顺时针旋转（约 13 s/圈）；L3–L7 作为同一 `eyeWhiteRoot` 一起平移注视；**仅 L3 与 L6 做呼吸缩放（2 s）**，L4、L5、L7 始终保持原比例。L7 贴 L6 外缘相切，不是可沿轨道移动的瞳孔。
+- **交互链路**：无交互 3 秒后开始待机扫视；`[emotion:xxx]` 改变眼白组的注视目标与 L2 转速；`BroadcastChannel('fairy-mouth-sync')` 的 TTS 振幅只增强允许缩放的 L3/L6。
+- **验收基线**：静态合成无多重圆盘叠影；L2 旋转时其余外层稳定；呼吸时只有 L3/L6 缩放；眼白位移不露黑缝。
+- **待完善**：接入 `docs/idle-dialogues/hdd-idle.md` 待机台词；TTS 路径配置化。
 
 ### 🔶 阶段6：UI完整美化、配套管理页面（部分已有骨架，未收尾）
 已有页面路由：`/chat` `/config` `/memory` `/worldbook` `/toolplugin` `/voice-call`

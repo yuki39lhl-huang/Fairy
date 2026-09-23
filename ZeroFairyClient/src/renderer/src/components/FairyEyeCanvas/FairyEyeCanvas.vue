@@ -1,4 +1,4 @@
-<!-- Fairy HDD 电子眼：背景 cover 铺满；眼睛固定尺寸居中（最大化只扩背景） -->
+﻿<!-- Fairy HDD eye: deterministic seven-layer composition, not a human Live2D model. -->
 <template>
   <div ref="container" class="fairy-eye-container">
     <canvas ref="canvas"></canvas>
@@ -6,37 +6,50 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch, type WatchStopHandle } from 'vue'
 import * as PIXI from 'pixi.js'
 import { useVoiceCallStore } from '../../stores/voiceCallStore'
 import { IdleScanController } from '../../services/idleScanController'
 import { GazeFocusController } from '../../services/gazeFocusController'
 
-/** 与 image/build_fairy_layers.py 一致 */
-const CANVAS_SIZE = 1254
-const CENTER_X = 627
-const CENTER_Y = 655
+/** Geometry is generated and verified by live2d-fairy/build_fairy_layers_v4.py. */
+const CANVAS_W = 873
+const CANVAS_H = 940
+const CENTER_X = 449.6
+const CENTER_Y = 507.3
+const PUPIL_X = 491.0
+const PUPIL_Y = 618.0
+const PUPIL_ANGLE = Math.atan2(PUPIL_Y - CENTER_Y, PUPIL_X - CENTER_X)
+const PUPIL_BASE_R = Math.hypot(PUPIL_X - CENTER_X, PUPIL_Y - CENTER_Y)
+/** A calm focus size: the actual outer rim occupies about half the window height. */
+const EYE_FIT = 0.62
+const BREATH_MIN = 0.975
+const BREATH_MAX = 1.025
+const BREATH_PERIOD_MS = 2000
+const ROTATION_PER_MS = (Math.PI * 2) / 13000 // one revolution per 13 s
+const EYEWHITE_GAZE_OFFSET = 14
+const ASSET_VER = 'v4-orbfree5'
 
-/** 眼睛相对窗口短边的占比；略留边，避免外圈贴满屏幕 */
-const EYE_FIT = 0.78
+/** L1（最外软光环）按设计省略，不再加载。 */
+const LAYER_NAMES = [
+  'layer_02',
+  'layer_03',
+  'layer_04',
+  'layer_05',
+  'layer_06',
+  'layer_07'
+] as const
 
-const EYE_LAYERS = ['blue_glow', 'outer_ring', 'core', 'white_ring'] as const
-
-const GAZE_OFFSET = {
-  blue_glow: 10,
-  outer_ring: 6,
-  core: 22,
-  white_ring: 26
-} as const
-
+const EYEWHITE_LAYERS = ['layer_03', 'layer_04', 'layer_05', 'layer_06', 'layer_07'] as const
+type LayerName = (typeof LAYER_NAMES)[number]
 type EmotionKey = 'normal' | 'caring' | 'smug' | 'teasing' | 'alert'
 
 const EMOTION_BIAS: Record<EmotionKey, { x: number; y: number; pulse: number; spin: number }> = {
   normal: { x: 0, y: 0, pulse: 1, spin: 0 },
-  caring: { x: 0, y: 0.12, pulse: 0.75, spin: 0 },
-  smug: { x: 0.4, y: -0.08, pulse: 1.15, spin: 0.15 },
-  teasing: { x: -0.35, y: 0.12, pulse: 1.25, spin: -0.2 },
-  alert: { x: 0, y: -0.25, pulse: 1.55, spin: 0.8 }
+  caring: { x: 0, y: 0.12, pulse: 0.7, spin: 0 },
+  smug: { x: 0.35, y: -0.08, pulse: 1.1, spin: 0.15 },
+  teasing: { x: -0.3, y: 0.12, pulse: 1.2, spin: -0.15 },
+  alert: { x: 0, y: -0.22, pulse: 1.45, spin: 0.65 }
 }
 
 const container = ref<HTMLElement | null>(null)
@@ -44,51 +57,84 @@ const canvas = ref<HTMLCanvasElement | null>(null)
 const voiceCallStore = useVoiceCallStore()
 
 let app: PIXI.Application | null = null
-let bgSprite: PIXI.Sprite | null = null
+let background: PIXI.Sprite | null = null
 let eyeRoot: PIXI.Container | null = null
-const layers: Partial<Record<(typeof EYE_LAYERS)[number], PIXI.Sprite>> = {}
+let eyeWhiteRoot: PIXI.Container | null = null
+const layers: Partial<Record<LayerName, PIXI.Sprite>> = {}
 let mouthAmplitude = 0
 let mouthSyncChannel: BroadcastChannel | null = null
 let idleScan: IdleScanController | null = null
-const gaze = new GazeFocusController()
+let stopSpeakingWatch: WatchStopHandle | null = null
+let stopEmotionWatch: WatchStopHandle | null = null
+let emotionTimer: number | null = null
 
+const gaze = new GazeFocusController()
 let emotionBias = EMOTION_BIAS.normal
-let emotionPunch = 0
 let emotionUntil = 0
-let baseOuterRotation = 0
+let baseL2Rotation = 0
 
 function layoutScene(): void {
-  if (!app || !bgSprite || !eyeRoot) return
-  const w = app.screen.width
-  const h = app.screen.height
+  if (!app || !background || !eyeRoot) return
+  const { width, height } = app.screen
 
-  // 背景：cover 铺满（只扩背景）
-  const bgScale = Math.max(w / CANVAS_SIZE, h / CANVAS_SIZE)
-  bgSprite.scale.set(bgScale)
-  bgSprite.x = w / 2
-  bgSprite.y = h / 2
+  const backgroundWidth = background.texture.width || CANVAS_W
+  const backgroundHeight = background.texture.height || CANVAS_H
+  const backgroundScale = Math.max(width / backgroundWidth, height / backgroundHeight)
+  background.scale.set(backgroundScale)
+  background.x = width / 2
+  background.y = height / 2
 
-  // 眼睛：按短边固定比例，宽屏最大化时大小不变（相对高度）
-  const eyeScale = (Math.min(w, h) * EYE_FIT) / CANVAS_SIZE
+  const eyeScale = (Math.min(width, height) * EYE_FIT) / CANVAS_H
   eyeRoot.scale.set(eyeScale)
-  eyeRoot.x = (w - CANVAS_SIZE * eyeScale) / 2
-  eyeRoot.y = (h - CANVAS_SIZE * eyeScale) / 2
+  // The art center is intentionally below-right of its raw image midpoint.
+  // Position from that calibrated point so the eye is visually centered.
+  eyeRoot.x = width / 2 - CENTER_X * eyeScale
+  eyeRoot.y = height / 2 - CENTER_Y * eyeScale
 }
 
 function applyEmotion(emotion: string): void {
   const key = (emotion in EMOTION_BIAS ? emotion : 'normal') as EmotionKey
   emotionBias = EMOTION_BIAS[key]
-  emotionPunch = 1
   emotionUntil = performance.now() + 1200
   idleScan?.pause()
   gaze.focus(emotionBias.x, emotionBias.y)
-  window.setTimeout(() => {
+
+  if (emotionTimer !== null) window.clearTimeout(emotionTimer)
+  emotionTimer = window.setTimeout(() => {
     if (performance.now() >= emotionUntil - 50) {
-      emotionPunch = 0
       emotionBias = EMOTION_BIAS.normal
       if (!voiceCallStore.isSpeaking) idleScan?.resume()
     }
   }, 1200)
+}
+
+/** Only L3 and L6 receive this scale, exactly as the animation rule requires. */
+function breathingScale(now: number): number {
+  const phase = (now % BREATH_PERIOD_MS) / BREATH_PERIOD_MS
+  const base = BREATH_MIN + (BREATH_MAX - BREATH_MIN) * (0.5 + 0.5 * Math.sin(phase * Math.PI * 2))
+  const remainingEmotion = Math.max(0, (emotionUntil - now) / 1200)
+  const speechKick = voiceCallStore.isSpeaking ? mouthAmplitude * 0.008 : 0
+  return base * (1 + speechKick + remainingEmotion * 0.012 * emotionBias.pulse)
+}
+
+function makeSprite(
+  texture: PIXI.Texture,
+  parent: PIXI.Container,
+  x: number,
+  y: number,
+  name: LayerName
+): PIXI.Sprite {
+  const sprite = new PIXI.Sprite(texture)
+  if (name === 'layer_07') {
+    // Anchor on the orb so it can ride L3's inner rim without inheriting scale.
+    sprite.anchor.set(PUPIL_X / CANVAS_W, PUPIL_Y / CANVAS_H)
+  } else {
+    sprite.anchor.set(CENTER_X / CANVAS_W, CENTER_Y / CANVAS_H)
+  }
+  sprite.x = x
+  sprite.y = y
+  parent.addChild(sprite)
+  return sprite
 }
 
 onMounted(async () => {
@@ -105,26 +151,31 @@ onMounted(async () => {
     autoDensity: true
   })
 
-  const bgTexture = await PIXI.Assets.load('/fairy/layers/background.png?v=flatscan5')
-  bgSprite = new PIXI.Sprite(bgTexture)
-  bgSprite.anchor.set(0.5)
-  app.stage.addChild(bgSprite)
+  const assets = await PIXI.Assets.load([
+    `/fairy/layers_v4/background.png?v=${ASSET_VER}`,
+    ...LAYER_NAMES.map((name) => `/fairy/layers_v4/${name}.png?v=${ASSET_VER}`)
+  ])
+
+  background = new PIXI.Sprite(assets[`/fairy/layers_v4/background.png?v=${ASSET_VER}`])
+  background.anchor.set(0.5)
+  app.stage.addChild(background)
 
   eyeRoot = new PIXI.Container()
   app.stage.addChild(eyeRoot)
+  eyeWhiteRoot = new PIXI.Container()
+  eyeWhiteRoot.x = CENTER_X
+  eyeWhiteRoot.y = CENTER_Y
 
-  for (const name of EYE_LAYERS) {
-    const texture = await PIXI.Assets.load(`/fairy/layers/${name}.png`)
-    const sprite = new PIXI.Sprite(texture)
-    sprite.anchor.set(CENTER_X / CANVAS_SIZE, CENTER_Y / CANVAS_SIZE)
-    sprite.x = CENTER_X
-    sprite.y = CENTER_Y
-    sprite.roundPixels = true
-    eyeRoot.addChild(sprite)
-    layers[name] = sprite
+  for (const name of LAYER_NAMES) {
+    const texture = assets[`/fairy/layers_v4/${name}.png?v=${ASSET_VER}`]
+    const parent = EYEWHITE_LAYERS.includes(name as (typeof EYEWHITE_LAYERS)[number]) ? eyeWhiteRoot : eyeRoot
+    const localX = parent === eyeWhiteRoot ? 0 : CENTER_X
+    const localY = parent === eyeWhiteRoot ? 0 : CENTER_Y
+    layers[name] = makeSprite(texture, parent, localX, localY, name)
   }
-
+  eyeRoot.addChild(eyeWhiteRoot)
   layoutScene()
+
   idleScan = new IdleScanController(gaze, {
     idleDelayMs: 3000,
     scanIntervalMs: 4000,
@@ -134,89 +185,81 @@ onMounted(async () => {
   idleScan.resume()
 
   mouthSyncChannel = new BroadcastChannel('fairy-mouth-sync')
-  mouthSyncChannel.onmessage = (e: MessageEvent) => {
-    mouthAmplitude = typeof e.data === 'number' ? e.data : 0
+  mouthSyncChannel.onmessage = (event: MessageEvent) => {
+    mouthAmplitude = typeof event.data === 'number' ? Math.max(0, Math.min(1, event.data)) : 0
   }
 
-  watch(
+  // These watches are deliberately retained and stopped: this async mounted
+  // callback creates them after await, so Vue cannot reliably auto-dispose them.
+  stopSpeakingWatch = watch(
     () => voiceCallStore.isSpeaking,
     (speaking) => {
       if (speaking) idleScan?.pause()
       else if (performance.now() >= emotionUntil) idleScan?.resume()
     }
   )
-
-  watch(
+  stopEmotionWatch = watch(
     () => voiceCallStore.emotionTrigger,
     () => applyEmotion(voiceCallStore.currentEmotion)
   )
 
   app.ticker.add((ticker) => {
-    layoutScene()
-    const dt = ticker.deltaMS
+    if (!eyeWhiteRoot) return
     const now = performance.now()
+    const dt = ticker.deltaMS
 
     if (voiceCallStore.isSpeaking && now >= emotionUntil) {
       const t = now / 1000
-      const amp = mouthAmplitude
-      gaze.focus(Math.sin(t * 2.3) * 0.4 * amp, Math.sin(t * 1.7 + 1) * 0.22 * amp)
+      gaze.focus(Math.sin(t * 2.3) * 0.35 * mouthAmplitude, Math.sin(t * 1.7 + 1) * 0.18 * mouthAmplitude)
     }
 
     const look = gaze.update(dt)
-    const amp = mouthAmplitude
-    const punch = emotionPunch * Math.max(0, (emotionUntil - now) / 1200)
-    const pulseMul = emotionBias.pulse
-    const isAlert = emotionBias === EMOTION_BIAS.alert
+    eyeWhiteRoot.x = CENTER_X + look.x * EYEWHITE_GAZE_OFFSET
+    eyeWhiteRoot.y = CENTER_Y + look.y * EYEWHITE_GAZE_OFFSET
 
-    for (const name of EYE_LAYERS) {
+    const l2 = layers.layer_02
+    if (l2) {
+      baseL2Rotation += dt * ROTATION_PER_MS * (1 + emotionBias.spin)
+      l2.rotation = baseL2Rotation
+    }
+
+    const breath = breathingScale(now)
+    for (const name of ['layer_03', 'layer_06'] as const) {
+      layers[name]?.scale.set(breath)
+    }
+    // L4 / L5 stay unscaled inside the eye-white group.
+    for (const name of ['layer_04', 'layer_05'] as const) {
       const sprite = layers[name]
       if (!sprite) continue
-      const max = GAZE_OFFSET[name]
-      sprite.x = CENTER_X + look.x * max
-      sprite.y = CENTER_Y + look.y * max
-      sprite.rotation = 0
       sprite.scale.set(1)
-      sprite.alpha = 1
+      sprite.x = 0
+      sprite.y = 0
     }
 
-    const white = layers.white_ring
-    const glow = layers.blue_glow
-    const outer = layers.outer_ring
-    const core = layers.core
+    // L7: no scale; ride L3 inner rim so the hole and orb never drift apart.
+    const l7 = layers.layer_07
+    if (l7) {
+      const rimR = PUPIL_BASE_R * breath
+      l7.x = Math.cos(PUPIL_ANGLE) * rimR
+      l7.y = Math.sin(PUPIL_ANGLE) * rimR
+      l7.scale.set(1)
+    }
 
-    if (white) {
-      const s = 1 + amp * 0.045 * pulseMul + punch * 0.06
-      white.scale.set(s)
-      white.alpha = Math.min(1, 0.92 + amp * 0.08)
-    }
-    if (glow) {
-      glow.alpha = Math.min(1, 0.85 + amp * 0.2 * pulseMul + punch * 0.15)
-      glow.scale.set(1 + amp * 0.03 * pulseMul + punch * 0.04)
-    }
-    if (core) {
-      core.scale.set(1 + amp * 0.02)
-    }
-    if (outer) {
-      baseOuterRotation +=
-        dt * 0.00015 * (voiceCallStore.isSpeaking ? 1.8 : 1) + emotionBias.spin * punch * 0.02
-      outer.rotation = baseOuterRotation
-      outer.alpha = Math.min(1, 0.9 + punch * 0.25)
-      if (isAlert) outer.scale.set(1 + punch * 0.05)
-    }
+    layoutScene()
   })
-
-  console.log('[FairyEye] 背景铺满 + 眼睛定尺寸已就绪')
 })
 
 onUnmounted(() => {
+  stopSpeakingWatch?.()
+  stopEmotionWatch?.()
+  if (emotionTimer !== null) window.clearTimeout(emotionTimer)
   idleScan?.destroy()
-  idleScan = null
   mouthSyncChannel?.close()
-  mouthSyncChannel = null
   app?.destroy(true, { children: true, texture: true })
   app = null
-  bgSprite = null
+  background = null
   eyeRoot = null
+  eyeWhiteRoot = null
 })
 </script>
 

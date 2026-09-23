@@ -1,0 +1,121 @@
+{
+  "source": "live2d-fairy/无第7层圆环的fiary.png",
+  "orb_source": "live2d-fairy/第四层白环.png",
+  "canvas": [
+    873,
+    940
+  ],
+  "center": [
+    449.6,
+    507.3
+  ],
+  "layer_07_orb": [
+    491.0,
+    618.0,
+    29.41
+  ],
+  "radii": {
+    "layer_01": [
+      315.19,
+      397.54
+    ],
+    "layer_02": [
+      208.0,
+      315.19
+    ],
+    "layer_03": [
+      147.66,
+      208.0
+    ],
+    "layer_04": [
+      110.74,
+      147.66
+    ],
+    "layer_05": [
+      88.03,
+      110.74
+    ],
+    "layer_06": [
+      0.0,
+      88.03
+    ]
+  },
+  "mask_radii": {
+    "layer_01": [
+      311.19,
+      397.54
+    ],
+    "layer_02": [
+      184.0,
+      318.19
+    ],
+    "layer_03": [
+      144.66,
+      216.0
+    ],
+    "layer_04": [
+      107.74,
+      152.66
+    ],
+    "layer_05": [
+      91.03,
+      113.74
+    ],
+    "layer_06": [
+      0.0,
+      95.03
+    ]
+  },
+  "breath": {
+    "min": 0.975,
+    "max": 1.025
+  },
+  "l7_tangent_rule": "R7 = breath_min * (pupil_base_r - R6_outer)",
+  "rules": {
+    "layer_01": "omitted in renderer",
+    "layer_02": "clockwise rotation",
+    "layer_03_to_layer_07": "translate as one eye-white group",
+    "breathing_layers": [
+      "layer_03",
+      "layer_06"
+    ],
+    "layer_04": "light-blue band, unscaled",
+    "layer_05": "thin blue ring, unscaled",
+    "layer_07": "white disc, rim-follow, unscaled"
+  },
+  "verification": {
+    "scale_src_to_canvas": 0.7099,
+    "pupil_radius": 29.41,
+    "pupil_base_r": 118.188,
+    "r6_outer": 88.03,
+    "breath_min": 0.975,
+    "layer_01": {
+      "visible_pixels": 217599,
+      "transparent_pixels": 603021
+    },
+    "layer_02": {
+      "visible_pixels": 216213,
+      "transparent_pixels": 604407
+    },
+    "layer_03": {
+      "visible_pixels": 84056,
+      "transparent_pixels": 736564
+    },
+    "layer_04": {
+      "visible_pixels": 39083,
+      "transparent_pixels": 781537
+    },
+    "layer_05": {
+      "visible_pixels": 16446,
+      "transparent_pixels": 804174
+    },
+    "layer_06": {
+      "visible_pixels": 29226,
+      "transparent_pixels": 791394
+    },
+    "layer_07": {
+      "visible_pixels": 3077,
+      "transparent_pixels": 817543
+    }
+  }
+}

@@ -31,6 +31,10 @@ common/*.aac
 common/*.zip
 common/fairy_motion_frames/
 common/fairy_motion_crops/
+common/image/
+common/image.png
+common/image copy.png
+live2d-fairy/*.mp4
 *.aac
 image.zip
 
