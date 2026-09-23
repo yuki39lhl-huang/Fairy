@@ -11,6 +11,7 @@ export type AgUiEventType =
     | 'ai:tool-call'
     | 'ai:status'
     | 'ai:audio-ready'
+    | 'ai:audio-reset'
     | 'ai:done'
     | 'ai:error'
     | 'reminder:changed'

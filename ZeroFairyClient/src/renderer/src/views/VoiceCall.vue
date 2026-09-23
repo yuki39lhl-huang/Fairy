@@ -57,17 +57,26 @@ async function startListening() {
   callError.value = ''
 
   try {
-    await startRecordingWithVad(async (audioData) => {
-      callState.value = 'processing'
-      const result = await window.api.transcribeRecording(audioData)
+    await startRecordingWithVad(
+      async (audioData) => {
+        callState.value = 'processing'
+        const result = await window.api.transcribeRecording(audioData)
 
-      if (result.success && result.text.trim()) {
-        await sendVoiceMessage(result.text.trim())
-      } else {
-        callError.value = result.error || '没有识别到内容'
-        startListening()
+        if (result.success && result.text.trim()) {
+          await sendVoiceMessage(result.text.trim())
+        } else {
+          callError.value = result.error || '没有识别到内容'
+          startListening()
+        }
+      },
+      {
+        // 通话场景：容忍换气/短停顿；豆包等产品还会再叠语义完句，这里先用更稳的能量端点
+        silenceDurationMs: 2200,
+        minSpeechMs: 800,
+        speechStartMs: 200,
+        maxDurationMs: 60000
       }
-    })
+    )
   } catch (error) {
     callError.value = error instanceof Error ? error.message : String(error)
   }

@@ -4,6 +4,12 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import * as OpenCC from 'opencc-js'
+
+const toSimplified = OpenCC.Converter({ from: 't', to: 'cn' })
+
+/** 引导 Whisper 偏向简体输出 */
+const ZH_PROMPT = '以下是简体中文普通话的句子。'
 
 function getWhisperPaths() {
   const resourcesRoot = app.isPackaged
@@ -14,6 +20,10 @@ function getWhisperPaths() {
     exe: path.join(resourcesRoot, 'whisper', 'Release', 'whisper-cli.exe'),
     model: path.join(resourcesRoot, 'models', 'ggml-small.bin')
   }
+}
+
+function normalizeTranscript(raw: string): string {
+  return toSimplified(raw.replace(/\s+/g, ' ').trim())
 }
 
 export function transcribeSpeech(audioPath: string): Promise<string> {
@@ -28,6 +38,7 @@ export function transcribeSpeech(audioPath: string): Promise<string> {
         '-m', model,
         '-f', audioPath,
         '-l', 'zh',
+        '--prompt', ZH_PROMPT,
         '--no-timestamps',
         '--no-prints',
         '--output-txt',
@@ -59,7 +70,7 @@ export function transcribeSpeech(audioPath: string): Promise<string> {
           return
         }
 
-        const transcript = (await fs.readFile(outputTextPath, 'utf8')).trim()
+        const transcript = normalizeTranscript(await fs.readFile(outputTextPath, 'utf8'))
         resolve(transcript)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)

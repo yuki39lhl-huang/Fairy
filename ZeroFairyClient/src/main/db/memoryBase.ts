@@ -73,6 +73,18 @@ export const memoryDb = {
     db.prepare('DELETE FROM memory WHERE id = ?').run(id)
   },
 
+  /** 按内容前缀清理（用于个人设定覆盖旧身份记忆） */
+  deleteByContentPrefixes(prefixes: string[]): number {
+    const db = getDb()
+    let removed = 0
+    const stmt = db.prepare('DELETE FROM memory WHERE content LIKE ?')
+    for (const prefix of prefixes) {
+      const result = stmt.run(`${prefix}%`)
+      removed += Number(result.changes ?? 0)
+    }
+    return removed
+  },
+
   // memoryBase.ts 加一个方法
   existsContent(content: string): boolean {
     const db = getDb()

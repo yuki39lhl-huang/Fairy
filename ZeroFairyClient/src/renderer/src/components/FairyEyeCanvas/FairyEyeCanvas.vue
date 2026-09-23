@@ -12,6 +12,19 @@ import { useVoiceCallStore } from '../../stores/voiceCallStore'
 import { IdleScanController } from '../../services/idleScanController'
 import { GazeFocusController } from '../../services/gazeFocusController'
 
+const props = withDefaults(
+  defineProps<{
+    /** 桌面宠物：不绘制背景图，只保留眼部圆环 */
+    hideBackground?: boolean
+    /** 眼睛相对窗口的适配比例，桌宠可略放大 */
+    eyeFit?: number
+  }>(),
+  {
+    hideBackground: false,
+    eyeFit: 0.62
+  }
+)
+
 /** Geometry is generated and verified by live2d-fairy/build_fairy_layers_v4.py. */
 const CANVAS_W = 873
 const CANVAS_H = 940
@@ -21,13 +34,11 @@ const PUPIL_X = 491.0
 const PUPIL_Y = 618.0
 const PUPIL_ANGLE = Math.atan2(PUPIL_Y - CENTER_Y, PUPIL_X - CENTER_X)
 const PUPIL_BASE_R = Math.hypot(PUPIL_X - CENTER_X, PUPIL_Y - CENTER_Y)
-/** A calm focus size: the actual outer rim occupies about half the window height. */
-const EYE_FIT = 0.62
 const BREATH_MIN = 0.975
 const BREATH_MAX = 1.025
 const BREATH_PERIOD_MS = 2000
 const ROTATION_PER_MS = (Math.PI * 2) / 13000 // one revolution per 13 s
-const EYEWHITE_GAZE_OFFSET = 14
+const EYEWHITE_GAZE_OFFSET = 26
 const ASSET_VER = 'v4-static-bg1'
 
 /** L1（最外软光环）按设计省略，不再加载。 */
@@ -74,17 +85,19 @@ let emotionUntil = 0
 let baseL2Rotation = 0
 
 function layoutScene(): void {
-  if (!app || !background || !eyeRoot) return
+  if (!app || !eyeRoot) return
   const { width, height } = app.screen
 
-  const backgroundWidth = background.texture.width || CANVAS_W
-  const backgroundHeight = background.texture.height || CANVAS_H
-  const backgroundScale = Math.max(width / backgroundWidth, height / backgroundHeight)
-  background.scale.set(backgroundScale)
-  background.x = width / 2
-  background.y = height / 2
+  if (background) {
+    const backgroundWidth = background.texture.width || CANVAS_W
+    const backgroundHeight = background.texture.height || CANVAS_H
+    const backgroundScale = Math.max(width / backgroundWidth, height / backgroundHeight)
+    background.scale.set(backgroundScale)
+    background.x = width / 2
+    background.y = height / 2
+  }
 
-  const eyeScale = (Math.min(width, height) * EYE_FIT) / CANVAS_H
+  const eyeScale = (Math.min(width, height) * props.eyeFit) / CANVAS_H
   eyeRoot.scale.set(eyeScale)
   // The art center is intentionally below-right of its raw image midpoint.
   // Position from that calibrated point so the eye is visually centered.
@@ -151,14 +164,17 @@ onMounted(async () => {
     autoDensity: true
   })
 
-  const assets = await PIXI.Assets.load([
-    `/fairy/layers_v4/background.png?v=${ASSET_VER}`,
+  const assetUrls = [
+    ...(props.hideBackground ? [] : [`/fairy/layers_v4/background.png?v=${ASSET_VER}`]),
     ...LAYER_NAMES.map((name) => `/fairy/layers_v4/${name}.png?v=${ASSET_VER}`)
-  ])
+  ]
+  const assets = await PIXI.Assets.load(assetUrls)
 
-  background = new PIXI.Sprite(assets[`/fairy/layers_v4/background.png?v=${ASSET_VER}`])
-  background.anchor.set(0.5)
-  app.stage.addChild(background)
+  if (!props.hideBackground) {
+    background = new PIXI.Sprite(assets[`/fairy/layers_v4/background.png?v=${ASSET_VER}`])
+    background.anchor.set(0.5)
+    app.stage.addChild(background)
+  }
 
   eyeRoot = new PIXI.Container()
   app.stage.addChild(eyeRoot)
@@ -179,8 +195,8 @@ onMounted(async () => {
   idleScan = new IdleScanController(gaze, {
     idleDelayMs: 3000,
     scanIntervalMs: 4000,
-    rangeX: 0.55,
-    rangeY: 0.35
+    rangeX: 0.92,
+    rangeY: 0.58
   })
   idleScan.resume()
 

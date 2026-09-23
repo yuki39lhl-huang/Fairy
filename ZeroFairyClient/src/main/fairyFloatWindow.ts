@@ -1,5 +1,5 @@
 // src/main/fairyFloatWindow.ts
-// Fairy 桌面右上角胶囊浮窗（提醒 / 状态）+ 可选 TTS
+// Fairy æ¡é¢å³ä¸è§è¶åæµ®çªï¼æé / ç¶æï¼+ å¯é TTS
 
 import { BrowserWindow, ipcMain, screen } from 'electron'
 import { join } from 'path'
@@ -11,12 +11,28 @@ let hideTimer: NodeJS.Timeout | null = null
 let speakToken = 0
 let rendererReady = false
 let pendingText: string | null = null
+let readyWaiters: Array<() => void> = []
 
 const BASE_H = 80
 const MARGIN = 10
 const FLOAT_W = 360
-/** 与 FairyFloat.vue leave 动画时长对齐 */
 const LEAVE_MS = 300
+
+export type FairyFloatSpeakMode =
+  /** ç­è¯­é³å°±ç»ªåå¼¹åºï¼éåå¯å¨é®åï¼é¿åæ å£°ç©ºçªï¼ */
+  | 'wait'
+  /** åå¼¹åºæå­ï¼è¯­é³åå°åæ­ï¼éåæéåç¹ï¼ */
+  | 'defer'
+
+export interface FairyFloatOptions {
+  durationMs?: number
+  speak?: boolean
+  speakText?: string
+  /** é¢åæå¥½çé³é¢ï¼æåå°ç¹ç´æ¥æ­ */
+  audioBuffer?: Buffer | Uint8Array
+  speakMode?: FairyFloatSpeakMode
+  scene?: 'chat' | 'reminder' | 'idle' | 'generic'
+}
 
 function estimateWidth(text: string): number {
   const chars = [...text].length
@@ -69,6 +85,7 @@ function ensureWindow(): BrowserWindow {
     floatWindow = null
     rendererReady = false
     pendingText = null
+    readyWaiters = []
   })
 
   return floatWindow
@@ -101,6 +118,13 @@ function sendShow(win: BrowserWindow, text: string): void {
   win.webContents.send('fairy-float:show', { text })
 }
 
+function sendAudio(win: BrowserWindow, audioBuffer: Buffer | Uint8Array): void {
+  if (win.isDestroyed()) return
+  const audioData =
+    audioBuffer instanceof Uint8Array ? audioBuffer : new Uint8Array(audioBuffer)
+  win.webContents.send('fairy-float:audio', { audioData })
+}
+
 function flushPending(win: BrowserWindow): void {
   if (!pendingText || win.isDestroyed()) return
   const text = pendingText
@@ -108,33 +132,69 @@ function flushPending(win: BrowserWindow): void {
   sendShow(win, text)
 }
 
-/** 渲染进程 FairyFloat 已挂上监听 */
+function resolveReadyWaiters(): void {
+  const waiters = readyWaiters
+  readyWaiters = []
+  for (const resolve of waiters) resolve()
+}
+
+function waitForRendererReady(win: BrowserWindow, token: number, timeoutMs = 5000): Promise<void> {
+  if (rendererReady) return Promise.resolve()
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      rendererReady = true
+      resolve()
+    }, timeoutMs)
+    readyWaiters.push(() => {
+      clearTimeout(timer)
+      if (token === speakToken) resolve()
+    })
+    if (win.webContents.isLoading()) {
+      win.webContents.once('did-finish-load', () => {
+        setTimeout(() => {
+          if (!rendererReady && token === speakToken) {
+            rendererReady = true
+            resolveReadyWaiters()
+          }
+        }, 200)
+      })
+    }
+  })
+}
+
 export function onFairyFloatReady(): void {
   rendererReady = true
+  resolveReadyWaiters()
   if (floatWindow && !floatWindow.isDestroyed()) {
     flushPending(floatWindow)
   }
 }
 
 /**
- * 右上角展示浮窗。
- * text = 展示文案；options.speakText 可单独指定朗读文案（默认与 text 相同）。
+ * å³ä¸è§å±ç¤ºæµ®çªã
+ * - speakMode=waitï¼ç­ TTS åå¼¹åºï¼å¯å¨é®åï¼
+ * - speakMode=deferï¼ååºå­ï¼è¯­é³åå°åæ­ï¼æéåç¹ï¼
+ * - audioBufferï¼é¢åæç¼å­ï¼å°ç¹ç´æ¥åºå­+å£°
  */
 export async function showFairyFloat(
   text: string,
-  options: { durationMs?: number; speak?: boolean; speakText?: string } | number = {}
+  options: FairyFloatOptions | number = {}
 ): Promise<void> {
-  const opts =
+  const opts: FairyFloatOptions =
     typeof options === 'number'
-      ? { durationMs: options, speak: true, speakText: undefined as string | undefined }
+      ? { durationMs: options, speak: true, speakMode: 'wait' }
       : {
           durationMs: options.durationMs ?? 0,
           speak: options.speak !== false,
-          speakText: options.speakText
+          speakText: options.speakText,
+          audioBuffer: options.audioBuffer,
+          speakMode: options.speakMode ?? 'wait',
+          scene: options.scene ?? 'generic'
         }
 
   const displayText = text
   const voiceText = (opts.speakText?.trim() || displayText).trim()
+  const speakMode: FairyFloatSpeakMode = opts.speakMode ?? 'wait'
 
   const win = ensureWindow()
   const width = estimateWidth(displayText)
@@ -142,52 +202,54 @@ export async function showFairyFloat(
   const token = ++speakToken
 
   clearHideTimer()
+  pendingText = null
   placeTopRight(win, width, height)
 
-  const pushText = (): void => {
-    if (win.isDestroyed()) return
-    if (rendererReady) {
-      pendingText = null
-      sendShow(win, displayText)
-    } else {
-      pendingText = displayText
-      if (!win.isVisible()) win.showInactive()
-      setTimeout(() => {
-        if (token !== speakToken || win.isDestroyed()) return
-        if (pendingText === displayText) {
-          rendererReady = true
-          flushPending(win)
-        } else if (win.isVisible()) {
-          sendShow(win, displayText)
-        }
-      }, 400)
-    }
+  await waitForRendererReady(win, token)
+  if (token !== speakToken || win.isDestroyed()) return
+
+  const fallbackHideMs = (spoken: string): number =>
+    Math.max(8000, Math.ceil(spoken.length * 280))
+
+  // å·²æé¢åæï¼ç»é¢ä¸å£°é³ä¸èµ·åº
+  if (opts.speak && opts.audioBuffer && opts.audioBuffer.byteLength > 0) {
+    sendShow(win, displayText)
+    sendAudio(win, opts.audioBuffer)
+    scheduleHide(fallbackHideMs(voiceText))
+    return
   }
 
-  if (win.webContents.isLoading()) {
-    win.webContents.once('did-finish-load', () => setTimeout(pushText, 50))
-  } else {
-    pushText()
+  if (opts.speak && speakMode === 'defer') {
+    sendShow(win, displayText)
+    scheduleHide(opts.durationMs > 0 ? opts.durationMs : fallbackHideMs(voiceText))
+    try {
+      const { audioBuffer } = await synthesizeSpeech(voiceText, { scene: opts.scene })
+      if (token !== speakToken || win.isDestroyed()) return
+      sendAudio(win, audioBuffer)
+      scheduleHide(fallbackHideMs(voiceText))
+    } catch (err) {
+      console.warn('[FairyFloat] å»¶å TTS å¤±è´¥ï¼ä»å±ç¤ºæå­:', err)
+    }
+    return
   }
 
   if (opts.speak) {
     try {
-      const { audioBuffer } = await synthesizeSpeech(voiceText)
+      const { audioBuffer } = await synthesizeSpeech(voiceText, { scene: opts.scene })
       if (token !== speakToken || win.isDestroyed()) return
       sendShow(win, displayText)
-      win.webContents.send('fairy-float:audio', {
-        audioData: new Uint8Array(audioBuffer)
-      })
-      const fallbackMs = Math.max(8000, Math.ceil(voiceText.length * 280))
-      scheduleHide(fallbackMs)
+      sendAudio(win, audioBuffer)
+      scheduleHide(fallbackHideMs(voiceText))
     } catch (err) {
-      console.warn('[FairyFloat] TTS 失败，仅展示文字:', err)
+      console.warn('[FairyFloat] TTS å¤±è´¥ï¼ä»å±ç¤ºæå­:', err)
+      if (token !== speakToken || win.isDestroyed()) return
       sendShow(win, displayText)
       scheduleHide(opts.durationMs > 0 ? opts.durationMs : 5500)
     }
     return
   }
 
+  sendShow(win, displayText)
   scheduleHide(opts.durationMs > 0 ? opts.durationMs : 5500)
 }
 
@@ -203,7 +265,6 @@ export function hideFairyFloat(): void {
   }, LEAVE_MS)
 }
 
-/** 音频播完后关闭浮窗 */
 export function onFairyFloatSpeechEnded(): void {
   scheduleHide(450)
 }

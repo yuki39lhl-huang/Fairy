@@ -14,7 +14,14 @@ import { retrieveMemories, saveDailogHistory, maybeExtractMemory } from './memor
 import { allTools, getToolByName } from './toolSystem'
 import { toolsToOpenAIFormat } from './llmAdapter/functionCall'
 import { initAccountingTable } from './db/accounting'
-import { synthesizeSpeech } from './voice/ttsClient'
+import {
+  synthesizeSpeech,
+  listTtsProviders,
+  switchTtsProvider,
+  ensureFairyVoice,
+  getFairyVoiceStatus
+} from './voice/ttsClient'
+import { getActiveTtsProvider } from './voice/tts/registry'
 import { transcribeSpeech } from './voice/whisperClient'
 import { createSentenceSegmenter } from './voice/sentenceSegmenter'
 import {
@@ -25,6 +32,24 @@ import {
   scheduleReminder
 } from './reminderSystem'
 import { showFairyFloat, onFairyFloatSpeechEnded, registerFairyFloatIpc } from './fairyFloatWindow'
+import {
+  registerFairyPetIpc,
+  bootstrapFairyPet
+} from './fairyPetWindow'
+import { memoryDb } from './db/memoryBase'
+
+function purgeIdentityMemories(): void {
+  try {
+    memoryDb.deleteByContentPrefixes([
+      '主人显示名是',
+      '主人的身份是',
+      '助手二号是',
+      '主人曾口头声明'
+    ])
+  } catch (err) {
+    console.warn('[user-profile] 清理旧身份记忆失败:', err)
+  }
+}
 
 interface MicAudioStats {
   durationSec: number
@@ -116,16 +141,41 @@ let voiceCallWindow: BrowserWindow | null = null
       console.error('[voice] 语音合成失败:', err instanceof Error ? err.message : String(err))
     })
 } */
+/** 每轮用户提问递增；过期的合成结果一律丢弃，避免「新问题播旧语音」 */
+let speechGeneration = 0
+let activeTtsQueue: { cancel: () => void } | null = null
+
+function beginSpeechTurn(): number {
+  speechGeneration += 1
+  const gen = speechGeneration
+  activeTtsQueue?.cancel()
+  activeTtsQueue = null
+  // 通知渲染端立刻清空播放队列并停播
+  agentEventBus.emit('ai:audio-reset', { generation: gen })
+  console.log('[voice] 新语音回合 generation=', gen)
+  return gen
+}
+
+function isSpeechCurrent(generation: number): boolean {
+  return generation === speechGeneration
+}
+
 function finalizeAssistantTurn(
   userText: string,
   fullReply: string,
   segmenter: ReturnType<typeof createSentenceSegmenter> | null,
-  ttsQueue: ReturnType<typeof createStreamingTtsQueue> | null
+  ttsQueue: ReturnType<typeof createStreamingTtsQueue> | null,
+  generation: number
 ): void {
   agentEventBus.emit('ai:done', {})
   const session = new Date().toDateString()
   saveDailogHistory(session, userText, fullReply)
   maybeExtractMemory(userText, fullReply)
+
+  if (!isSpeechCurrent(generation)) {
+    console.log('[voice] 回合已过期，跳过收尾 TTS generation=', generation)
+    return
+  }
 
   if (segmenter && ttsQueue) {
     // 分句流式模式：把最后没被终结符切到的尾巴补发出去
@@ -137,20 +187,28 @@ function finalizeAssistantTurn(
   // segmenter/ttsQueue为null有两种情况：语音整体关闭，或者"存文件到本地"开着、这轮改走整段合成
   if (!storeManager.getVoiceEnabled()) return
   synthesizeSpeech(fullReply)
-    .then(({ audioBuffer }) => sendSynthesizedAudio(audioBuffer))
+    .then(({ audioBuffer }) => {
+      if (!isSpeechCurrent(generation)) {
+        console.log('[voice] 整段合成完成但回合已过期，丢弃')
+        return
+      }
+      return sendSynthesizedAudio(audioBuffer, generation)
+    })
     .catch((err) => {
       console.error('[voice] 整段语音合成失败:', err instanceof Error ? err.message : String(err))
     })
 }
 
-async function sendSynthesizedAudio(audioBuffer: Buffer): Promise<void> {
+async function sendSynthesizedAudio(audioBuffer: Buffer, generation: number): Promise<void> {
+  if (!isSpeechCurrent(generation)) return
+
   if (voiceCallWindow && !voiceCallWindow.isDestroyed()) {
     voiceCallWindow.webContents.send('ag-ui-event', {
       type: 'ai:audio-ready',
-      payload: { audioData: audioBuffer }
+      payload: { audioData: audioBuffer, generation }
     })
   } else {
-    agentEventBus.emit('ai:audio-ready', { audioData: audioBuffer })
+    agentEventBus.emit('ai:audio-ready', { audioData: audioBuffer, generation })
   }
 
   if (storeManager.getVoiceSaveToFile()) {
@@ -164,17 +222,37 @@ async function sendSynthesizedAudio(audioBuffer: Buffer): Promise<void> {
   }
 }
 
-function createStreamingTtsQueue(): { pushSentence: (sentence: string) => void } {
+function createStreamingTtsQueue(generation: number): {
+  pushSentence: (sentence: string) => void
+  cancel: () => void
+} {
   const queue: string[] = []
   let synthesizing = false
+  let cancelled = false
+
+  function cancel(): void {
+    cancelled = true
+    queue.length = 0
+  }
 
   function processNext(): void {
-    if (synthesizing || queue.length === 0) return
+    if (cancelled || synthesizing || queue.length === 0) return
+    if (!isSpeechCurrent(generation)) {
+      cancel()
+      return
+    }
     const sentence = queue.shift()!
     synthesizing = true
     synthesizeSpeech(sentence)
-      .then(({ audioBuffer }) => sendSynthesizedAudio(audioBuffer))
+      .then(({ audioBuffer }) => {
+        if (cancelled || !isSpeechCurrent(generation)) {
+          console.log('[voice] 分句合成完成但回合已过期，丢弃')
+          return
+        }
+        return sendSynthesizedAudio(audioBuffer, generation)
+      })
       .catch((err) => {
+        if (cancelled || !isSpeechCurrent(generation)) return
         console.error('[voice] 分句语音合成失败:', err instanceof Error ? err.message : String(err))
       })
       .finally(() => {
@@ -184,12 +262,13 @@ function createStreamingTtsQueue(): { pushSentence: (sentence: string) => void }
   }
 
   function pushSentence(sentence: string): void {
+    if (cancelled || !isSpeechCurrent(generation)) return
     if (!sentence.trim()) return
     queue.push(sentence)
     processNext()
   }
 
-  return { pushSentence }
+  return { pushSentence, cancel }
 }
 
 
@@ -204,7 +283,7 @@ function forwardEmotionToRenderer(emotion: string): void {
   }
 }
 
-function createWindow(): void {
+function createWindow(): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 900,
     height: 670,
@@ -220,6 +299,15 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
     agentEventBus.register(mainWindow.webContents)
+
+    // 主窗口起来后再问候，避免和启动抢同一时刻；等 TTS 就绪再一起弹出
+    setTimeout(() => {
+      void showFairyFloat('主人，我正处在空闲中。', {
+        speak: true,
+        speakMode: 'wait',
+        scene: 'idle'
+      })
+    }, 1800)
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -232,6 +320,8 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  return mainWindow
 }
 
 function createVoiceCallWindow(): void {
@@ -297,6 +387,7 @@ app.whenReady().then(() => {
 
   getDb()
   initAccountingTable() // 初始化会计表
+  purgeIdentityMemories()
   importWorldBookFromDocs()
   hydrateReminders()
   electronApp.setAppUserModelId('com.electron')
@@ -336,8 +427,11 @@ app.whenReady().then(() => {
         const voiceOn = storeManager.getVoiceEnabled()
         const saveToFile = storeManager.getVoiceSaveToFile()
         const useStreaming = voiceOn && !saveToFile   // 存文件开着的时候，这轮强制走整段合成
+        // 新提问：作废上一轮未完成的 TTS，并通知前端停播
+        const speechGen = beginSpeechTurn()
         const segmenter = useStreaming ? createSentenceSegmenter() : null
-        const ttsQueue = useStreaming ? createStreamingTtsQueue() : null
+        const ttsQueue = useStreaming ? createStreamingTtsQueue(speechGen) : null
+        if (ttsQueue) activeTtsQueue = ttsQueue
 
         agentEventBus.emit('ai:status', { phase: 'thinking' })
 
@@ -436,7 +530,7 @@ app.whenReady().then(() => {
                   )
                 }
 
-                finalizeAssistantTurn(text, fullReply, segmenter, ttsQueue)
+                finalizeAssistantTurn(text, fullReply, segmenter, ttsQueue, speechGen)
               } catch (err) {
                 const error = err instanceof Error ? err : new Error(String(err))
                 console.error('[Tool] 处理工具调用时出错:', error)
@@ -444,7 +538,7 @@ app.whenReady().then(() => {
               }
             },
             onDone: () => {
-              finalizeAssistantTurn(text, fullReply, segmenter, ttsQueue)
+              finalizeAssistantTurn(text, fullReply, segmenter, ttsQueue, speechGen)
             },
             onError: (err) => {
               agentEventBus.emit('ai:error', { message: err.message })
@@ -464,6 +558,23 @@ app.whenReady().then(() => {
 
   ipcMain.handle('save-api-key', (_event, provider: string, key: string) => {
     storeManager.setApiKey(provider, key)
+    // 云 TTS 密钥保存后后台准备 Fairy 声线
+    if (provider === 'minimax') {
+      void ensureFairyVoice('minimax').catch(() => undefined)
+    }
+    if (
+      provider === 'volcengine' ||
+      provider === 'volcengineAppId' ||
+      provider === 'volcengineAccessToken'
+    ) {
+      const hasKey = Boolean(storeManager.getApiKey('volcengine')?.trim())
+      const hasPair =
+        Boolean(storeManager.getApiKey('volcengineAppId')?.trim()) &&
+        Boolean(storeManager.getApiKey('volcengineAccessToken')?.trim())
+      if (hasKey || hasPair) {
+        void ensureFairyVoice('seed-icl-2.0').catch(() => undefined)
+      }
+    }
   })
 
   ipcMain.handle('get-api-key', (_event, provider: string) => {
@@ -486,6 +597,19 @@ app.whenReady().then(() => {
       return scheduleReminder(message, delaySeconds, 'manual')
     }
   )
+
+  ipcMain.handle('user-profile:get', () => storeManager.getUserProfile())
+  ipcMain.handle('user-profile:set', (_event, profile: Record<string, unknown>) => {
+    const next = storeManager.setUserProfile(
+      profile as Parameters<typeof storeManager.setUserProfile>[0]
+    )
+    // 身份只走 prompt，不再写入记忆；并清掉历史里的 Yukimomo / 错误助手二号
+    purgeIdentityMemories()
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('user-profile:changed', next)
+    }
+    return next
+  })
 
   ipcMain.handle('get-voice-enabled', () => {
     return storeManager.getVoiceEnabled()
@@ -526,6 +650,35 @@ app.whenReady().then(() => {
 
   ipcMain.handle('set-voice-save-to-file', (_event, enabled: boolean) => {
     storeManager.setVoiceSaveToFile(enabled)
+  })
+
+  ipcMain.handle('tts:list-providers', () => {
+    return listTtsProviders().map((p) => ({
+      id: p.id,
+      displayName: p.displayName,
+      hint: p.hint ?? '',
+      kind: p.kind ?? 'cloud'
+    }))
+  })
+
+  ipcMain.handle('tts:get-active-provider', () => {
+    return storeManager.getActiveTtsProvider() || getActiveTtsProvider().id
+  })
+
+  ipcMain.handle('tts:set-active-provider', async (_event, id: string) => {
+    await switchTtsProvider(String(id))
+    return storeManager.getActiveTtsProvider()
+  })
+
+  ipcMain.handle('tts:fairy-voice-status', (_event, providerId?: string) => {
+    const id = String(providerId || storeManager.getActiveTtsProvider() || 'gpt-sovits')
+    return getFairyVoiceStatus(id)
+  })
+
+  ipcMain.handle('tts:ensure-fairy-voice', async (_event, providerId?: string, force?: boolean) => {
+    const id = String(providerId || storeManager.getActiveTtsProvider() || 'gpt-sovits')
+    await ensureFairyVoice(id, { force: Boolean(force) })
+    return getFairyVoiceStatus(id)
   })
 
   ipcMain.handle('whisper:transcribe', async (_event, audioPath: string) => {
@@ -589,14 +742,11 @@ app.whenReady().then(() => {
   createWindow()
 
   registerFairyFloatIpc()
+  registerFairyPetIpc()
+  bootstrapFairyPet()
   ipcMain.handle('fairy-float:speech-ended', () => {
     onFairyFloatSpeechEnded()
   })
-
-  // 预热右上角浮窗，并朗读空闲提示（等一会儿让主窗口先起来）
-  setTimeout(() => {
-    void showFairyFloat('主人，我正处在空闲中。', { speak: true })
-  }, 800)
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -604,7 +754,9 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  // 桌宠仍在时不退出（隐藏窗也算存活）
+  const visibleOrPet = BrowserWindow.getAllWindows().length > 0
+  if (!visibleOrPet && process.platform !== 'darwin') {
     app.quit()
   }
 })

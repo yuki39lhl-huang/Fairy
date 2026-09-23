@@ -49,19 +49,26 @@ function stopMouthSync(): void {
   mouthSyncChannel.postMessage(0)
 }
 
+/** 立刻停掉当前播放（新一轮对话打断旧语音时用） */
+export function stopReplyAudio(): void {
+  if (currentSound) {
+    currentSound.stop()
+    currentSound.unload()
+    currentSound = null
+  }
+  if (currentObjectUrl) {
+    URL.revokeObjectURL(currentObjectUrl)
+    currentObjectUrl = null
+  }
+  stopMouthSync()
+}
+
 /**
  * 播放主进程推来的音频二进制数据。
  * onEnd：播放真正结束时触发（正常播完、或者播放失败都会触发，保证调用方不会因为播放失败就永远等不到"结束"信号）。
  */
 export function playReplyAudio(audioData: Uint8Array, onEnd?: () => void): void {
-  if (currentSound) {
-    currentSound.stop()
-    currentSound.unload()
-  }
-  if (currentObjectUrl) {
-    URL.revokeObjectURL(currentObjectUrl)
-  }
-  stopMouthSync()
+  stopReplyAudio()
 
   if (Howler.ctx && Howler.ctx.state !== 'running') {
     Howler.ctx.resume()

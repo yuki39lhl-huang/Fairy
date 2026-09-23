@@ -1,5 +1,6 @@
 // src/main/reminderSystem/index.ts
 // 定时提醒登记中心：列表展示 + 到点通知（应用运行期间有效，并持久化待执行项）
+// 到点前预合成语音，避免本地 GPT-SoVITS 缓冲拖慢「响铃」体感
 
 import { app } from 'electron'
 import { randomUUID } from 'crypto'
@@ -7,6 +8,7 @@ import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import { agentEventBus } from '../agentEventBus'
 import { showFairyFloat } from '../fairyFloatWindow'
+import { synthesizeSpeech } from '../voice/ttsClient'
 
 export type ReminderStatus = 'pending' | 'fired' | 'cancelled'
 
@@ -23,7 +25,14 @@ export interface ReminderRecord {
 }
 
 const MAX_HISTORY = 40
-const timers = new Map<string, NodeJS.Timeout>()
+/** 到点前提前合成的时间（毫秒） */
+const PREFETCH_MS = 12_000
+
+const fireTimers = new Map<string, NodeJS.Timeout>()
+const prefetchTimers = new Map<string, NodeJS.Timeout>()
+const audioCache = new Map<string, Buffer>()
+const prefetchInFlight = new Set<string>()
+
 let reminders: ReminderRecord[] = []
 
 function storePath(): string {
@@ -53,23 +62,87 @@ function notifyChange(): void {
   agentEventBus.emit('reminder:changed', { reminders: listReminders() })
 }
 
+function buildSpeakText(item: ReminderRecord): string {
+  const content = (item.message || '').trim() || '提醒'
+  // 人工创建：朗读加前缀；Fairy 创建：文案里通常已有「主人」称呼
+  return item.source === 'manual' ? `主人，提醒时间到了——${content}` : content
+}
+
+function clearPrefetch(id: string): void {
+  const t = prefetchTimers.get(id)
+  if (t) clearTimeout(t)
+  prefetchTimers.delete(id)
+  prefetchInFlight.delete(id)
+  audioCache.delete(id)
+}
+
+function clearFireTimer(id: string): void {
+  const t = fireTimers.get(id)
+  if (t) clearTimeout(t)
+  fireTimers.delete(id)
+}
+
+async function prefetchAudio(id: string): Promise<void> {
+  const item = reminders.find((r) => r.id === id)
+  if (!item || item.status !== 'pending') return
+  if (audioCache.has(id) || prefetchInFlight.has(id)) return
+
+  prefetchInFlight.add(id)
+  try {
+    const speakText = buildSpeakText(item)
+    const { audioBuffer } = await synthesizeSpeech(speakText, { scene: 'reminder' })
+    // 仍是同一条 pending 才写入缓存
+    const latest = reminders.find((r) => r.id === id)
+    if (latest && latest.status === 'pending') {
+      audioCache.set(id, audioBuffer)
+      console.log('[Reminder] 语音预合成完成:', id)
+    }
+  } catch (err) {
+    console.warn('[Reminder] 语音预合成失败，将到点后再合成:', err)
+  } finally {
+    prefetchInFlight.delete(id)
+  }
+}
+
+function armPrefetch(item: ReminderRecord): void {
+  if (item.status !== 'pending') return
+  clearTimeout(prefetchTimers.get(item.id))
+  prefetchTimers.delete(item.id)
+
+  const delay = item.fireAt - Date.now() - PREFETCH_MS
+  if (delay <= 0) {
+    void prefetchAudio(item.id)
+    return
+  }
+  prefetchTimers.set(
+    item.id,
+    setTimeout(() => {
+      void prefetchAudio(item.id)
+    }, delay)
+  )
+}
+
 function fireReminder(id: string): void {
   const item = reminders.find((r) => r.id === id)
   if (!item || item.status !== 'pending') return
 
   item.status = 'fired'
-  timers.delete(id)
+  clearFireTimer(id)
+  const cached = audioCache.get(id)
+  clearPrefetch(id)
   trimHistory()
   persist()
 
   try {
     const content = (item.message || '').trim() || '提醒'
-    // 人工创建：朗读加前缀；Fairy 创建：文案里通常已有「主人」称呼，不再叠加
-    const speakText =
-      item.source === 'manual' ? `主人，提醒时间到了——${content}` : content
+    const speakText = buildSpeakText(item)
     void showFairyFloat(content, {
       speak: true,
-      speakText
+      speakText,
+      scene: 'reminder',
+      // 有缓存：准点出字+声；无缓存：先出字，语音后到再播（不拖画面）
+      audioBuffer: cached,
+      speakMode: cached ? 'wait' : 'defer'
     })
   } catch (err) {
     console.warn('[Reminder] 浮窗提示失败:', err)
@@ -80,13 +153,13 @@ function fireReminder(id: string): void {
 
 function armTimer(item: ReminderRecord): void {
   if (item.status !== 'pending') return
+  clearFireTimer(item.id)
   const delay = Math.max(0, item.fireAt - Date.now())
-  const existing = timers.get(item.id)
-  if (existing) clearTimeout(existing)
-  timers.set(
+  fireTimers.set(
     item.id,
     setTimeout(() => fireReminder(item.id), delay)
   )
+  armPrefetch(item)
 }
 
 export function listReminders(): ReminderRecord[] {
@@ -123,9 +196,8 @@ export function cancelReminder(id: string): boolean {
   const item = reminders.find((r) => r.id === id)
   if (!item || item.status !== 'pending') return false
   item.status = 'cancelled'
-  const t = timers.get(id)
-  if (t) clearTimeout(t)
-  timers.delete(id)
+  clearFireTimer(id)
+  clearPrefetch(id)
   trimHistory()
   persist()
   notifyChange()
@@ -152,7 +224,6 @@ export function hydrateReminders(): void {
     if (!Array.isArray(raw)) return
     reminders = raw.map((r) => {
       const msg = String(r.message ?? '').trim()
-      // 旧数据无 source：文案已带「主人」视为 Fairy；否则按人工处理
       const source: ReminderSource =
         r.source === 'manual' || r.source === 'fairy'
           ? r.source

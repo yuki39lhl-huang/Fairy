@@ -1,6 +1,6 @@
 <!-- Settings: harness-style section rail + preference rows. -->
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 
 type SectionId = 'models' | 'search' | 'voice'
 
@@ -13,18 +13,89 @@ const savedTavilyMask = ref('')
 const savingTavily = ref(false)
 const voiceEnabled = ref(true)
 const voiceSaveToFile = ref(false)
+const desktopPetEnabled = ref(true)
+const desktopPetPinned = ref(false)
+
+const ttsProviders = ref<
+  Array<{ id: string; displayName: string; hint: string; kind: 'local' | 'cloud' }>
+>([])
+const activeTtsProvider = ref('gpt-sovits')
+const switchingTts = ref(false)
+
+const minimaxKey = ref('')
+const savedMinimaxMask = ref('')
+const savingMinimax = ref(false)
+
+const volcApiKey = ref('')
+const savedVolcApiMask = ref('')
+const savingVolcApi = ref(false)
+const volcAppId = ref('')
+const savedVolcAppMask = ref('')
+const volcAccessToken = ref('')
+const savedVolcTokenMask = ref('')
+const savingVolcPair = ref(false)
+
+const fairyStatus = ref<{
+  status: 'ready' | 'pending' | 'failed' | 'missing'
+  voiceId?: string
+  lastError?: string
+}>({ status: 'missing' })
+const ensuringVoice = ref(false)
+let statusTimer: ReturnType<typeof setInterval> | null = null
+let unsubPetState: (() => void) | null = null
 
 const sections: { id: SectionId; label: string; hint: string }[] = [
   { id: 'models', label: '模型', hint: 'DeepSeek API' },
   { id: 'search', label: '搜索', hint: 'Tavily 联网' },
-  { id: 'voice', label: '语音', hint: '播放与存档' }
+  { id: 'voice', label: '语音', hint: '厂家与声线' }
 ]
+
+const fairyStatusLabel = computed(() => {
+  switch (fairyStatus.value.status) {
+    case 'ready':
+      return 'Fairy 声线已就绪'
+    case 'pending':
+      return 'Fairy 声线准备中…'
+    case 'failed':
+      return `准备失败：${fairyStatus.value.lastError || '未知错误'}`
+    default:
+      return activeTtsProvider.value === 'gpt-sovits'
+        ? '本地参考音（无需密钥）'
+        : '尚未准备（保存密钥后自动开始）'
+  }
+})
+
+async function refreshFairyStatus(): Promise<void> {
+  fairyStatus.value = await window.api.getFairyVoiceStatus(activeTtsProvider.value)
+}
 
 onMounted(async () => {
   savedMask.value = await window.api.getApiKey('deepseek')
   savedTavilyMask.value = await window.api.getApiKey('tavily')
   voiceEnabled.value = await window.api.getVoiceEnabled()
   voiceSaveToFile.value = await window.api.getVoiceSaveToFile()
+  const petState = await window.api.getFairyPetState()
+  desktopPetEnabled.value = petState.enabled
+  desktopPetPinned.value = petState.pinned
+  ttsProviders.value = await window.api.listTtsProviders()
+  activeTtsProvider.value = await window.api.getActiveTtsProvider()
+  savedMinimaxMask.value = await window.api.getApiKey('minimax')
+  savedVolcApiMask.value = await window.api.getApiKey('volcengine')
+  savedVolcAppMask.value = await window.api.getApiKey('volcengineAppId')
+  savedVolcTokenMask.value = await window.api.getApiKey('volcengineAccessToken')
+  await refreshFairyStatus()
+  statusTimer = setInterval(() => {
+    void refreshFairyStatus()
+  }, 2000)
+  unsubPetState = window.api.onFairyPetState((state) => {
+    desktopPetEnabled.value = state.enabled
+    desktopPetPinned.value = state.pinned
+  })
+})
+
+onUnmounted(() => {
+  if (statusTimer) clearInterval(statusTimer)
+  unsubPetState?.()
 })
 
 async function saveKey(): Promise<void> {
@@ -57,6 +128,93 @@ async function onVoiceEnabledChange(): Promise<void> {
 
 async function onVoiceSaveToFileChange(): Promise<void> {
   await window.api.setVoiceSaveToFile(voiceSaveToFile.value)
+}
+
+async function onDesktopPetChange(): Promise<void> {
+  const state = await window.api.setFairyPetEnabled(desktopPetEnabled.value)
+  desktopPetEnabled.value = state.enabled
+  desktopPetPinned.value = state.pinned
+}
+
+async function onDesktopPetPinnedChange(): Promise<void> {
+  const state = await window.api.setFairyPetPinned(desktopPetPinned.value)
+  desktopPetPinned.value = state.pinned
+}
+
+async function onTtsProviderChange(): Promise<void> {
+  switchingTts.value = true
+  try {
+    activeTtsProvider.value = await window.api.setActiveTtsProvider(activeTtsProvider.value)
+    await refreshFairyStatus()
+  } finally {
+    switchingTts.value = false
+  }
+}
+
+async function selectTtsProvider(id: string): Promise<void> {
+  if (switchingTts.value || id === activeTtsProvider.value) return
+  activeTtsProvider.value = id
+  await onTtsProviderChange()
+}
+
+async function saveMinimaxKey(): Promise<void> {
+  if (!minimaxKey.value.trim()) return
+  savingMinimax.value = true
+  try {
+    await window.api.saveApiKey('minimax', minimaxKey.value.trim())
+    savedMinimaxMask.value = await window.api.getApiKey('minimax')
+    minimaxKey.value = ''
+    fairyStatus.value = { status: 'pending' }
+    await refreshFairyStatus()
+  } finally {
+    savingMinimax.value = false
+  }
+}
+
+async function saveVolcApiKey(): Promise<void> {
+  if (!volcApiKey.value.trim()) return
+  savingVolcApi.value = true
+  try {
+    await window.api.saveApiKey('volcengine', volcApiKey.value.trim())
+    savedVolcApiMask.value = await window.api.getApiKey('volcengine')
+    volcApiKey.value = ''
+    fairyStatus.value = { status: 'pending' }
+    await refreshFairyStatus()
+  } finally {
+    savingVolcApi.value = false
+  }
+}
+
+async function saveVolcPair(): Promise<void> {
+  if (!volcAppId.value.trim() || !volcAccessToken.value.trim()) return
+  savingVolcPair.value = true
+  try {
+    await window.api.saveApiKey('volcengineAppId', volcAppId.value.trim())
+    await window.api.saveApiKey('volcengineAccessToken', volcAccessToken.value.trim())
+    savedVolcAppMask.value = await window.api.getApiKey('volcengineAppId')
+    savedVolcTokenMask.value = await window.api.getApiKey('volcengineAccessToken')
+    volcAppId.value = ''
+    volcAccessToken.value = ''
+    fairyStatus.value = { status: 'pending' }
+    await refreshFairyStatus()
+  } finally {
+    savingVolcPair.value = false
+  }
+}
+
+async function retryEnsureVoice(): Promise<void> {
+  ensuringVoice.value = true
+  try {
+    fairyStatus.value = await window.api.ensureFairyVoice(activeTtsProvider.value, true)
+  } catch (err) {
+    fairyStatus.value = {
+      status: 'failed',
+      lastError: err instanceof Error ? err.message : String(err)
+    }
+  } finally {
+    ensuringVoice.value = false
+    await refreshFairyStatus()
+  }
 }
 </script>
 
@@ -160,7 +318,9 @@ async function onVoiceSaveToFileChange(): Promise<void> {
       <section v-show="section === 'voice'" class="pane-block">
         <header class="pane-head">
           <h2 class="pane-title">语音</h2>
-          <p class="pane-sub">控制回复后的语音合成与本地存档。</p>
+          <p class="pane-sub">
+            选厂家、填密钥即可。Fairy 声线由内置参考音自动绑定，无需选音色或上传音频。
+          </p>
         </header>
 
         <div class="field row">
@@ -170,6 +330,38 @@ async function onVoiceSaveToFileChange(): Promise<void> {
           </div>
           <label class="toggle">
             <input v-model="voiceEnabled" type="checkbox" @change="onVoiceEnabledChange" />
+            <span class="toggle-track" />
+          </label>
+        </div>
+
+        <div class="field row">
+          <div class="field-copy">
+            <div class="field-label">桌面 Fairy</div>
+            <p class="field-desc">
+              启动后显示无背景圆环。右键可固定/隐藏；隐藏会同步关掉本开关。
+            </p>
+          </div>
+          <label class="toggle">
+            <input
+              v-model="desktopPetEnabled"
+              type="checkbox"
+              @change="onDesktopPetChange"
+            />
+            <span class="toggle-track" />
+          </label>
+        </div>
+
+        <div v-if="desktopPetEnabled" class="field row">
+          <div class="field-copy">
+            <div class="field-label">固定桌面 Fairy</div>
+            <p class="field-desc">固定后不可拖拽缩放；桌面右键只能固定，取消固定请在此关闭。</p>
+          </div>
+          <label class="toggle">
+            <input
+              v-model="desktopPetPinned"
+              type="checkbox"
+              @change="onDesktopPetPinnedChange"
+            />
             <span class="toggle-track" />
           </label>
         </div>
@@ -190,6 +382,179 @@ async function onVoiceSaveToFileChange(): Promise<void> {
             <span class="toggle-track" />
           </label>
         </div>
+
+        <div class="field">
+          <div class="field-copy">
+            <div class="field-label">语音厂家</div>
+            <p class="field-desc">选一家即可；云端保存密钥后会自动准备 Fairy 声线。</p>
+          </div>
+          <div class="provider-list" role="listbox" aria-label="语音厂家">
+            <button
+              v-for="p in ttsProviders"
+              :key="p.id"
+              type="button"
+              class="provider-option"
+              role="option"
+              :aria-selected="activeTtsProvider === p.id"
+              :class="{ active: activeTtsProvider === p.id }"
+              :disabled="switchingTts"
+              @click="selectTtsProvider(p.id)"
+            >
+              <span class="provider-main">
+                <span class="provider-name">{{ p.displayName }}</span>
+                <span class="provider-tag" :class="p.kind">
+                  {{ p.kind === 'local' ? '本地' : '云端' }}
+                </span>
+              </span>
+              <span class="provider-hint">{{ p.hint }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-copy">
+            <div class="field-label">Fairy 声线</div>
+            <p class="field-desc">
+              状态：
+              <span
+                class="status"
+                :class="{
+                  ok: fairyStatus.status === 'ready',
+                  warn: fairyStatus.status === 'pending',
+                  bad: fairyStatus.status === 'failed'
+                }"
+              >
+                {{ fairyStatusLabel }}
+              </span>
+            </p>
+          </div>
+          <div
+            v-if="activeTtsProvider !== 'gpt-sovits'"
+            class="field-control"
+          >
+            <button
+              type="button"
+              class="btn-save"
+              :disabled="ensuringVoice"
+              @click="retryEnsureVoice"
+            >
+              {{
+                ensuringVoice
+                  ? '重克隆中…'
+                  : fairyStatus.status === 'failed'
+                    ? '重试准备'
+                    : '重新克隆声线'
+              }}
+            </button>
+          </div>
+        </div>
+
+        <template v-if="activeTtsProvider === 'minimax'">
+          <div class="field">
+            <div class="field-copy">
+              <div class="field-label">MiniMax API Key</div>
+              <p class="field-desc">
+                状态：
+                <span class="status" :class="{ ok: !!savedMinimaxMask }">
+                  {{ savedMinimaxMask || '未配置' }}
+                </span>
+              </p>
+            </div>
+            <div class="field-control">
+              <input
+                v-model="minimaxKey"
+                type="password"
+                class="input"
+                placeholder="MiniMax API Key"
+                autocomplete="off"
+                @keydown.enter="saveMinimaxKey"
+              />
+              <button
+                type="button"
+                class="btn-save"
+                :disabled="savingMinimax || !minimaxKey.trim()"
+                @click="saveMinimaxKey"
+              >
+                {{ savingMinimax ? '保存中…' : '保存' }}
+              </button>
+            </div>
+          </div>
+        </template>
+
+        <template v-if="activeTtsProvider === 'seed-icl-2.0'">
+          <div class="field">
+            <div class="field-copy">
+              <div class="field-label">火山 API Key（新版控制台，推荐）</div>
+              <p class="field-desc">
+                状态：
+                <span class="status" :class="{ ok: !!savedVolcApiMask }">
+                  {{ savedVolcApiMask || '未配置' }}
+                </span>
+              </p>
+            </div>
+            <div class="field-control">
+              <input
+                v-model="volcApiKey"
+                type="password"
+                class="input"
+                placeholder="X-Api-Key"
+                autocomplete="off"
+                @keydown.enter="saveVolcApiKey"
+              />
+              <button
+                type="button"
+                class="btn-save"
+                :disabled="savingVolcApi || !volcApiKey.trim()"
+                @click="saveVolcApiKey"
+              >
+                {{ savingVolcApi ? '保存中…' : '保存' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-copy">
+              <div class="field-label">或使用 AppId + Access Token（旧版）</div>
+              <p class="field-desc">
+                AppId：
+                <span class="status" :class="{ ok: !!savedVolcAppMask }">
+                  {{ savedVolcAppMask || '未配置' }}
+                </span>
+                · Token：
+                <span class="status" :class="{ ok: !!savedVolcTokenMask }">
+                  {{ savedVolcTokenMask || '未配置' }}
+                </span>
+              </p>
+            </div>
+            <div class="field-stack">
+              <input
+                v-model="volcAppId"
+                type="password"
+                class="input"
+                placeholder="AppId"
+                autocomplete="off"
+              />
+              <input
+                v-model="volcAccessToken"
+                type="password"
+                class="input"
+                placeholder="Access Token"
+                autocomplete="off"
+                @keydown.enter="saveVolcPair"
+              />
+              <button
+                type="button"
+                class="btn-save"
+                :disabled="
+                  savingVolcPair || !volcAppId.trim() || !volcAccessToken.trim()
+                "
+                @click="saveVolcPair"
+              >
+                {{ savingVolcPair ? '保存中…' : '保存' }}
+              </button>
+            </div>
+          </div>
+        </template>
       </section>
     </div>
   </div>
@@ -332,10 +697,102 @@ async function onVoiceSaveToFileChange(): Promise<void> {
   color: var(--agent-accent);
 }
 
+.status.warn {
+  color: #d4a017;
+}
+
+.status.bad {
+  color: #e07070;
+}
+
 .field-control {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.provider-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 0.5px solid var(--agent-border-strong);
+  border-radius: 10px;
+  background: var(--agent-surface-2);
+  color: var(--agent-text-mid);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.provider-option:hover:not(:disabled) {
+  border-color: var(--agent-border-strong);
+  background: var(--agent-surface-3);
+  color: var(--agent-text);
+}
+
+.provider-option.active {
+  border-color: var(--agent-accent);
+  background: color-mix(in srgb, var(--agent-accent) 12%, var(--agent-surface-2));
+  color: var(--agent-text);
+}
+
+.provider-option:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.provider-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.provider-tag {
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 0.5px solid var(--agent-border-strong);
+  color: var(--agent-text-dim);
+}
+
+.provider-tag.local {
+  border-color: color-mix(in srgb, var(--agent-accent) 45%, transparent);
+  color: var(--agent-accent);
+}
+
+.provider-tag.cloud {
+  color: var(--agent-text-mid);
+}
+
+.provider-hint {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--agent-text-dim);
 }
 
 .input {

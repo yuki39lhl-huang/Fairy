@@ -1,9 +1,10 @@
 <!-- App shell: brand, new session, collapsible rail, bottom-pinned settings. -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useChatStore } from '../../stores/chatStore'
 import { useLlmStore } from '../../stores/llmStore'
+import fairyMark from '../../assets/fairy-mark.png'
 
 const route = useRoute()
 const router = useRouter()
@@ -11,6 +12,36 @@ const chatStore = useChatStore()
 const llmStore = useLlmStore()
 const collapsed = ref(false)
 const confirmOpen = ref(false)
+
+const displayName = ref('主人')
+const avatarDataUrl = ref('')
+let unsubProfile: (() => void) | null = null
+
+const avatarLetter = computed(() => {
+  const name = displayName.value.trim() || '主'
+  return [...name][0] || '主'
+})
+
+function applyProfile(p: {
+  displayName: string
+  avatarDataUrl: string
+}): void {
+  displayName.value = p.displayName?.trim() || '主人'
+  avatarDataUrl.value = p.avatarDataUrl || ''
+}
+
+onMounted(async () => {
+  try {
+    applyProfile(await window.api.getUserProfile())
+  } catch {
+    /* ignore */
+  }
+  unsubProfile = window.api.onUserProfileChanged(applyProfile)
+})
+
+onUnmounted(() => {
+  unsubProfile?.()
+})
 
 const navItems = [
   { to: '/chat', label: '聊天' },
@@ -22,6 +53,9 @@ const navItems = [
 const activePath = computed(() => route.path)
 const settingsActive = computed(
   () => activePath.value === '/config' || activePath.value.startsWith('/config/')
+)
+const profileActive = computed(
+  () => activePath.value === '/profile' || activePath.value.startsWith('/profile/')
 )
 
 const hasChatContent = computed(
@@ -94,7 +128,7 @@ function toggleSidebar(): void {
         </button>
 
         <div v-if="!collapsed" class="brand" @click="requestNewChat">
-          <span class="brand-mark" aria-hidden="true">F</span>
+          <img class="brand-mark" :src="fairyMark" alt="" aria-hidden="true" />
           <div class="brand-text">
             <span class="brand-name">Fairy</span>
             <span class="brand-badge">Agent</span>
@@ -107,7 +141,7 @@ function toggleSidebar(): void {
           title="Fairy"
           @click="requestNewChat"
         >
-          F
+          <img class="brand-mark-img" :src="fairyMark" alt="Fairy" />
         </button>
       </div>
 
@@ -164,13 +198,24 @@ function toggleSidebar(): void {
           <span v-if="!collapsed">设置</span>
           <span v-else class="nav-dot">设</span>
         </button>
-        <div v-if="!collapsed" class="user-chip">
-          <span class="user-avatar">柚</span>
-          <span class="user-name">Fairy Agent</span>
-        </div>
-        <div v-else class="user-chip alone">
-          <span class="user-avatar">柚</span>
-        </div>
+        <button
+          type="button"
+          class="user-chip"
+          :class="{ alone: collapsed, active: profileActive }"
+          :title="collapsed ? displayName : undefined"
+          @click="router.push('/profile')"
+        >
+          <span class="user-avatar">
+            <img
+              v-if="avatarDataUrl"
+              class="user-avatar-img"
+              :src="avatarDataUrl"
+              alt=""
+            />
+            <template v-else>{{ avatarLetter }}</template>
+          </span>
+          <span v-if="!collapsed" class="user-name">{{ displayName }}</span>
+        </button>
       </div>
     </aside>
 
@@ -228,7 +273,8 @@ function toggleSidebar(): void {
 .nav-primary,
 .nav-item,
 .sidebar-foot,
-.brand-mark.alone {
+.brand-mark.alone,
+.user-chip {
   -webkit-app-region: no-drag;
 }
 
@@ -276,22 +322,32 @@ function toggleSidebar(): void {
 .brand-mark {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: 50%;
   display: grid;
   place-items: center;
-  background: var(--agent-surface-2);
+  background: transparent;
   color: var(--agent-text);
-  font-size: 13px;
-  font-weight: 600;
-  box-shadow: var(--agent-elevation-soft);
+  box-shadow: none;
   border: none;
+  outline: none;
   cursor: pointer;
   font: inherit;
   flex-shrink: 0;
+  object-fit: contain;
+  padding: 0;
+  overflow: visible;
 }
 
 .brand-mark.alone {
   margin: 0;
+}
+
+.brand-mark-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 50%;
 }
 
 .brand-text {
@@ -421,12 +477,31 @@ function toggleSidebar(): void {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 8px 2px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.user-chip:hover {
+  background: var(--agent-sidebar-hover);
+}
+
+.user-chip.active {
+  background: var(--agent-sidebar-active);
 }
 
 .user-chip.alone {
+  width: 36px;
+  height: 36px;
   justify-content: center;
-  padding: 10px 0 2px;
+  padding: 0;
 }
 
 .user-avatar {
@@ -435,14 +510,27 @@ function toggleSidebar(): void {
   border-radius: 50%;
   display: grid;
   place-items: center;
+  overflow: hidden;
   background: var(--agent-surface-2);
   font-size: 11px;
   font-weight: 600;
+  flex-shrink: 0;
+}
+
+.user-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .user-name {
   font-size: 12px;
   color: var(--agent-text-dim);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .main {

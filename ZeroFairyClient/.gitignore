@@ -4,3 +4,5 @@ out
 .DS_Store
 .eslintcache
 *.log*
+tmp_fairy_frames
+tmp_*

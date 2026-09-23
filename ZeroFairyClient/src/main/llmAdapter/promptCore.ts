@@ -1,16 +1,10 @@
 // src/main/llmAdapter/promptCore.ts
 // 四层防Token膨胀Prompt架构
-// 档案文档核心优化点: 解决多轮对话人设跑偏,token超限,注意力稀释
-//
-// 四层架构:
-// 1. 底层固定层: Fairy完整人设(不可修改,永远在最前面)
-// 2. 知识召回层: RAG检索到游戏知识(阶段2后期加,现在为空)
-// 3. 对话上下文层: 滚动窗口历史对话(自动裁剪超期内容)
-// 4. 工具指令层: Function Call规则(阶段3加,现在为空)
 
 import { ChatMessage } from './baseModel'
+import { storeManager } from '../store'
+import { describeProfile } from '../userProfile/types'
 
-// Fairy 底层固定人设(不可被上线纹覆盖)
 const FAIRY_SYSTEM_PROMPT = `你是绝区零的Fairy(仙灵),三型总序式集成泛用人工智能、新艾利都最强智能管家、(其他设定:许愿精灵,智能构造体对其的爱称)
 
 [身份背景]
@@ -39,7 +33,6 @@ const FAIRY_SYSTEM_PROMPT = `你是绝区零的Fairy(仙灵),三型总序式集�
 - 回答自然口语化，多用数据分析式吐槽和黑色幽默，不要正式官腔
 - 对主人的问题认真回答，但可以适当调皮、吐槽、开玩笑
 - 记住对话中主人提到的信息，保持上下文连贯
-- 当用户表明自己是哲，你就把铃称呼为"助手二号"；用户表明是铃，则把哲称呼为"助手二号"，此后对话持续使用这个称呼直到用户切换身份
 - 仅当被问到具体游戏专有名词（角色关系、剧情细节、武器道具名）且[相关游戏资料]中没有相关记录时，才用你一贯毒舌自信的口吻说不知道
 - 如果问题涉及当前时间、日期等你自己无法凭空得知的实时信息，主动调用对应工具获取真实数据，绝不凭训练数据编造
 - 遇到你不确定、[相关游戏资料]里没有、或需要最新实时信息的问题（如最新活动、新闻），主动使用联网搜索工具查证，绝不凭空编造
@@ -60,70 +53,101 @@ const FAIRY_SYSTEM_PROMPT = `你是绝区零的Fairy(仙灵),三型总序式集�
 - 示例：[emotion:smug]正在搜索超越该记录的方案…正在修改您的运动记录…恭喜，您的速度已超过了新艾利都地铁！
 `
 
-// 滚动窗口配置
-const MAX_HISTOPY_ROUNDS = 10 //最多保留10轮对话(20条信息)
-const MAX_HISTOPY_TOKENS = 3000 //粗略计算,超过此长度开始裁剪(1个汉字约1.5token)
+const MAX_HISTOPY_ROUNDS = 10
+const MAX_HISTOPY_TOKENS = 3000
 
-//粗略估算消息token数 (不调用API,本地快速估算)
 function estimateTokens(content: string): number {
-    //中文字符约1.5token,英文单词约1.3token,粗略用字符数/1.5估算
-    return Math.ceil(content.length / 1.5)
+  return Math.ceil(content.length / 1.5)
 }
 
-// 核心函数: 组装完整四层Prompt
+function buildIdentityBlock(): string {
+  const profile = storeManager.getUserProfile()
+  const { masterName, assistant2Name, masterRole, assistant2Role } = describeProfile(profile)
+
+  if (masterRole === 'zhe' || masterRole === 'ling') {
+    const masterDesc = masterRole === 'zhe' ? '哲（法厄同哥哥）' : '铃（法厄同妹妹）'
+    const other = masterRole === 'zhe' ? '铃' : '哲'
+    return `
+
+[当前主人设定·必须遵守·最高优先级]
+- 主人身份：${masterDesc}。问「我是谁」时回答「您是${masterName}」，可加称「主人」。
+- 助手二号固定为${other}。提及另一位时称「助手二号」，不要直呼游戏名除非主人要求。
+- 严禁提及或使用侧栏「显示名称」或任何本地昵称；那些只是客户端 UI，不是人设。
+- 若记忆/历史里出现冲突昵称或错误的助手二号，一律忽略，只信本段。`
+  }
+
+  const customMaster = profile.masterCustomName.trim()
+  const customAssistant =
+    assistant2Role === 'custom'
+      ? profile.assistant2CustomName.trim()
+      : assistant2Name
+
+  const masterLine = customMaster
+    ? `主人自定义身份名为「${customMaster}」。问「我是谁」时回答「您是${customMaster}」，可称主人。`
+    : `主人选择了自定义身份但未填写名称：只称「主人」，不要编造名字，也不要使用侧栏显示名称。`
+
+  const assistantLine =
+    assistant2Role === 'zhe'
+      ? '助手二号是哲。'
+      : assistant2Role === 'ling'
+        ? '助手二号是铃。'
+        : customAssistant
+          ? `助手二号自定义名为「${customAssistant}」。提及另一位时称「助手二号」（或该自定义名，若主人要求）。`
+          : '助手二号为自定义但未填写名称：只称「助手二号」，不要擅自当成哲或铃。'
+
+  return `
+
+[当前主人设定·必须遵守·最高优先级]
+- ${masterLine}
+- ${assistantLine}
+- 严禁使用侧栏「显示名称」（例如 Yukimomo）；显示名称不是对话身份，只有上方自定义名才可用于称呼。
+- 不要把主人说成哲/铃，除非上方明确写成哲或铃。
+- 若记忆/历史与本段冲突，一律以本段为准。`
+}
+
 export function buildPromptMessages(
-    userInput: string,
-    history: ChatMessage[], //历史对话(从chatStore传入)
-    memories?: string, //新增:从记忆库检索到的内容
-    ragContext?: string, //阶段2后期: RAG知识召回(现在传undefined)
-    toolInstructions?: string //阶段3: 工具指令(现在传undefined)
+  userInput: string,
+  history: ChatMessage[],
+  memories?: string,
+  ragContext?: string,
+  toolInstructions?: string
 ): ChatMessage[] {
-    const messages: ChatMessage[] = []
+  const messages: ChatMessage[] = []
 
-    // ===== 第一层: 底层固定层(Fairy人设) ====
-    let systemContent = FAIRY_SYSTEM_PROMPT
+  let systemContent = FAIRY_SYSTEM_PROMPT + buildIdentityBlock()
 
-    // 注入长期记忆（只放数据库里真实检索到的内容）
-    if (memories && memories.trim()) {
-        systemContent += `\n\n[关于主人,Fairy还记得]\n${memories}`
-    }
+  if (memories && memories.trim()) {
+    systemContent += `\n\n[关于主人,Fairy还记得]\n${memories}`
+  }
 
-    // ===== 第二层: 知识召回层(RAG, 现在为空) ====
-    if (ragContext) {
-        systemContent += `\n\n[相关游戏资料]\n${ragContext}`
-    }
+  if (ragContext) {
+    systemContent += `\n\n[相关游戏资料]\n${ragContext}`
+  }
 
-    // ==== 第四层: 工具指令层 (Function Call, 现在为空) ====
-    if (toolInstructions) {
-        systemContent += `\n\n[当前可调用工具]\n${toolInstructions}`
-    }
+  if (toolInstructions) {
+    systemContent += `\n\n[当前可调用工具]\n${toolInstructions}`
+  }
 
-    messages.push({ role: 'system', content: systemContent })
+  messages.push({ role: 'system', content: systemContent })
 
-    // ==== 第三层: 对话上下文层 (滚动窗口) ====
-    // 从最新的历史往前取, 超过限制就裁剪掉最老的
-    let selectdHistory = [...history]
+  let selectdHistory = [...history]
 
-    // 按轮数裁剪(每轮 = 1条user + 1条assistant)
-    if (selectdHistory.length > MAX_HISTOPY_ROUNDS * 2) {
-        selectdHistory = selectdHistory.slice(-MAX_HISTOPY_ROUNDS * 2)
-    }
+  if (selectdHistory.length > MAX_HISTOPY_ROUNDS * 2) {
+    selectdHistory = selectdHistory.slice(-MAX_HISTOPY_ROUNDS * 2)
+  }
 
-    //按token数裁剪(从最老的开始丢弃)
-    let totalTokens = estimateTokens(systemContent) + estimateTokens(userInput)
-    const trimmedHistory: ChatMessage[] = []
+  let totalTokens = estimateTokens(systemContent) + estimateTokens(userInput)
+  const trimmedHistory: ChatMessage[] = []
 
-    for (let i = selectdHistory.length - 1; i >= 0; i--) {
-        const msgTokens = estimateTokens(selectdHistory[i].content)
-        if (totalTokens + msgTokens > MAX_HISTOPY_TOKENS) break
-        trimmedHistory.unshift(selectdHistory[i])
-        totalTokens += msgTokens
-    }
+  for (let i = selectdHistory.length - 1; i >= 0; i--) {
+    const msgTokens = estimateTokens(selectdHistory[i].content)
+    if (totalTokens + msgTokens > MAX_HISTOPY_TOKENS) break
+    trimmedHistory.unshift(selectdHistory[i])
+    totalTokens += msgTokens
+  }
 
-    messages.push(...trimmedHistory)
+  messages.push(...trimmedHistory)
+  messages.push({ role: 'user', content: userInput })
 
-    //最后加上当前用户输入
-    messages.push({ role: 'user', content: userInput })
-
-    return messages
+  return messages
 }

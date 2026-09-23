@@ -274,8 +274,23 @@ function encodeWav16Mono(pcmData: Float32Array, sampleRate: number): Uint8Array 
 ; (window as any).testMic = { startRecording, stopRecording, recordOnce, startRecordingWithVad, abortVadRecording }
 
 export interface VadOptions {
+  /** RMS 高于此视为有声音，默认 0.02 */
   silenceThreshold?: number
+  /**
+   * 判定「说完」所需的连续静音时长。
+   * 换气/顿挫通常 <1.2s；句末停顿更长。默认 2000ms，避免一喘气就截断。
+   */
   silenceDurationMs?: number
+  /**
+   * 累计有效发声时长达到此值后，才允许用静音结束本轮。
+   * 防止刚开口一个字、短促杂音就进入「可结束」状态。默认 700ms。
+   */
+  minSpeechMs?: number
+  /**
+   * 连续发声达到此值才算「真的开始说话」（过滤咳嗽/碰麦）。默认 180ms。
+   */
+  speechStartMs?: number
+  /** 最长录音，超时强制结束。默认 45000ms */
   maxDurationMs?: number
 }
 
@@ -285,16 +300,20 @@ let vadIntervalId: number | null = null
 let vadActive = false
 
 /**
- * 开始录音，同时实时监听音量，检测到"已经说过话+随后安静了一段时间"后
- * 自动停止录音、转换成WAV，并把最终音频数据直接传给回调——调用方不用再手动调stopRecording()。
+ * 开始录音，同时实时监听音量。
+ * 规则：确认开过口 → 累计发声够长 → 再连续静音一段时间 → 才自动截断并回调。
+ * （纯能量 VAD，不是语义端点；豆包那类会再叠流式 ASR/语义完句判断。）
  */
 export async function startRecordingWithVad(
   onSilenceDetected: (audioData: Uint8Array) => void,
   options: VadOptions = {}
 ): Promise<void> {
   const silenceThreshold = options.silenceThreshold ?? 0.02
-  const silenceDurationMs = options.silenceDurationMs ?? 1200
-  const maxDurationMs = options.maxDurationMs ?? 30000
+  const silenceDurationMs = options.silenceDurationMs ?? 2000
+  const minSpeechMs = options.minSpeechMs ?? 700
+  const speechStartMs = options.speechStartMs ?? 180
+  const maxDurationMs = options.maxDurationMs ?? 45000
+  const pollMs = 100
 
   await startRecording()
   vadActive = true
@@ -307,6 +326,8 @@ export async function startRecordingWithVad(
 
   const dataArray = new Float32Array(vadAnalyser.fftSize)
   let hasSpokenYet = false
+  let continuousSpeechMs = 0
+  let voicedTotalMs = 0
   let silenceStartedAt = 0
   const recordingStartedAt = performance.now()
 
@@ -332,17 +353,30 @@ export async function startRecordingWithVad(
     }
     const rms = Math.sqrt(squareSum / dataArray.length)
     const now = performance.now()
+    const speaking = rms >= silenceThreshold
 
-    if (rms >= silenceThreshold) {
-      hasSpokenYet = true
+    if (speaking) {
+      continuousSpeechMs += pollMs
+      voicedTotalMs += pollMs
       silenceStartedAt = 0
-    } else if (hasSpokenYet) {
-      if (silenceStartedAt === 0) silenceStartedAt = now
-      if (now - silenceStartedAt >= silenceDurationMs) {
-        window.clearInterval(vadIntervalId!)
-        vadIntervalId = null
-        void finishRecording()
-        return
+      if (!hasSpokenYet && continuousSpeechMs >= speechStartMs) {
+        hasSpokenYet = true
+      }
+    } else {
+      continuousSpeechMs = 0
+      if (hasSpokenYet && voicedTotalMs >= minSpeechMs) {
+        if (silenceStartedAt === 0) silenceStartedAt = now
+        // 说得越久，句末静音可略收紧（仍不低于 1.4s），兼顾长句与自然停顿
+        const adaptiveSilence = Math.max(
+          1400,
+          silenceDurationMs - Math.min(600, Math.floor(voicedTotalMs / 20))
+        )
+        if (now - silenceStartedAt >= adaptiveSilence) {
+          window.clearInterval(vadIntervalId!)
+          vadIntervalId = null
+          void finishRecording()
+          return
+        }
       }
     }
 
@@ -352,7 +386,7 @@ export async function startRecordingWithVad(
       vadIntervalId = null
       void finishRecording()
     }
-  }, 150)
+  }, pollMs)
 }
 /**
  * 手动中止正在进行的VAD监听（用户点了静音）。

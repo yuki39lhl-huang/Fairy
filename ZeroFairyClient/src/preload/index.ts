@@ -24,6 +24,35 @@ const api = {
   setVoiceEnabled: (enabled: boolean): Promise<void> => ipcRenderer.invoke('set-voice-enabled', enabled),
   getVoiceSaveToFile: (): Promise<boolean> => ipcRenderer.invoke('get-voice-save-to-file'),
   setVoiceSaveToFile: (enabled: boolean): Promise<void> => ipcRenderer.invoke('set-voice-save-to-file', enabled),
+
+  listTtsProviders: (): Promise<
+    Array<{ id: string; displayName: string; hint: string; kind: 'local' | 'cloud' }>
+  > => ipcRenderer.invoke('tts:list-providers'),
+  getActiveTtsProvider: (): Promise<string> => ipcRenderer.invoke('tts:get-active-provider'),
+  setActiveTtsProvider: (id: string): Promise<string> =>
+    ipcRenderer.invoke('tts:set-active-provider', id),
+  getFairyVoiceStatus: (
+    providerId?: string
+  ): Promise<{
+    profileId: string
+    displayName: string
+    providerId: string
+    status: 'ready' | 'pending' | 'failed' | 'missing'
+    voiceId?: string
+    lastError?: string
+  }> => ipcRenderer.invoke('tts:fairy-voice-status', providerId),
+  ensureFairyVoice: (
+    providerId?: string,
+    force?: boolean
+  ): Promise<{
+    profileId: string
+    displayName: string
+    providerId: string
+    status: 'ready' | 'pending' | 'failed' | 'missing'
+    voiceId?: string
+    lastError?: string
+  }> => ipcRenderer.invoke('tts:ensure-fairy-voice', providerId, force),
+
   openVoiceCallWindow: (): Promise<void> => ipcRenderer.invoke('open-voice-call-window'),
   minimizeVoiceCallWindow: (): Promise<void> => ipcRenderer.invoke('minimize-voice-call-window'),
   toggleMaximizeVoiceCallWindow: (): Promise<boolean> =>
@@ -116,7 +145,141 @@ const api = {
     fireAt: number
     status: 'pending' | 'fired' | 'cancelled'
     source?: 'manual' | 'fairy'
-  }> => ipcRenderer.invoke('reminders:create', payload)
+  }> => ipcRenderer.invoke('reminders:create', payload),
+
+  getUserProfile: (): Promise<{
+    displayName: string
+    avatarDataUrl: string
+    masterRole: 'zhe' | 'ling' | 'custom'
+    masterCustomName: string
+    assistant2Role: 'zhe' | 'ling' | 'custom'
+    assistant2CustomName: string
+  }> => ipcRenderer.invoke('user-profile:get'),
+  setUserProfile: (
+    profile: Partial<{
+      displayName: string
+      avatarDataUrl: string
+      masterRole: 'zhe' | 'ling' | 'custom'
+      masterCustomName: string
+      assistant2Role: 'zhe' | 'ling' | 'custom'
+      assistant2CustomName: string
+    }>
+  ): Promise<{
+    displayName: string
+    avatarDataUrl: string
+    masterRole: 'zhe' | 'ling' | 'custom'
+    masterCustomName: string
+    assistant2Role: 'zhe' | 'ling' | 'custom'
+    assistant2CustomName: string
+  }> => ipcRenderer.invoke('user-profile:set', profile),
+  onUserProfileChanged: (
+    callback: (profile: {
+      displayName: string
+      avatarDataUrl: string
+      masterRole: 'zhe' | 'ling' | 'custom'
+      masterCustomName: string
+      assistant2Role: 'zhe' | 'ling' | 'custom'
+      assistant2CustomName: string
+    }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      profile: {
+        displayName: string
+        avatarDataUrl: string
+        masterRole: 'zhe' | 'ling' | 'custom'
+        masterCustomName: string
+        assistant2Role: 'zhe' | 'ling' | 'custom'
+        assistant2CustomName: string
+      }
+    ): void => {
+      callback(profile)
+    }
+    ipcRenderer.on('user-profile:changed', listener)
+    return () => {
+      ipcRenderer.removeListener('user-profile:changed', listener)
+    }
+  },
+
+  getFairyPetState: (): Promise<{
+    enabled: boolean
+    visible: boolean
+    pinned: boolean
+    bounds: { x: number; y: number; width: number; height: number } | null
+  }> => ipcRenderer.invoke('fairy-pet:get-state'),
+  setFairyPetEnabled: (
+    enabled: boolean
+  ): Promise<{
+    enabled: boolean
+    visible: boolean
+    pinned: boolean
+    bounds: { x: number; y: number; width: number; height: number } | null
+  }> => ipcRenderer.invoke('fairy-pet:set-enabled', enabled),
+  showFairyPet: (): Promise<{
+    enabled: boolean
+    visible: boolean
+    pinned: boolean
+    bounds: { x: number; y: number; width: number; height: number } | null
+  }> => ipcRenderer.invoke('fairy-pet:show'),
+  hideFairyPet: (): Promise<{
+    enabled: boolean
+    visible: boolean
+    pinned: boolean
+    bounds: { x: number; y: number; width: number; height: number } | null
+  }> => ipcRenderer.invoke('fairy-pet:hide'),
+  setFairyPetPinned: (
+    pinned: boolean
+  ): Promise<{
+    enabled: boolean
+    visible: boolean
+    pinned: boolean
+    bounds: { x: number; y: number; width: number; height: number } | null
+  }> => ipcRenderer.invoke('fairy-pet:set-pinned', pinned),
+  setFairyPetBounds: (bounds: {
+    x?: number
+    y?: number
+    width?: number
+    height?: number
+  }): Promise<{
+    enabled: boolean
+    visible: boolean
+    pinned: boolean
+    bounds: { x: number; y: number; width: number; height: number } | null
+  }> => ipcRenderer.invoke('fairy-pet:set-bounds', bounds),
+  openFairyPetSettings: (): Promise<void> => ipcRenderer.invoke('fairy-pet:open-settings'),
+  onFairyPetState: (
+    callback: (state: {
+      enabled: boolean
+      visible: boolean
+      pinned: boolean
+      bounds: { x: number; y: number; width: number; height: number } | null
+    }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      state: {
+        enabled: boolean
+        visible: boolean
+        pinned: boolean
+        bounds: { x: number; y: number; width: number; height: number } | null
+      }
+    ): void => {
+      callback(state)
+    }
+    ipcRenderer.on('fairy-pet:state', listener)
+    return () => {
+      ipcRenderer.removeListener('fairy-pet:state', listener)
+    }
+  },
+  onNavigate: (callback: (path: string) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, path: string): void => {
+      callback(path)
+    }
+    ipcRenderer.on('navigate', listener)
+    return () => {
+      ipcRenderer.removeListener('navigate', listener)
+    }
+  }
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

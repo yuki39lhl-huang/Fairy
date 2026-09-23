@@ -89,7 +89,6 @@ async function handleMicClick(): Promise<void> {
       const result = await window.api.transcribeRecording(audioData)
       if (result.success && result.text.trim()) {
         inputText.value = result.text.trim()
-        await sendMessage()
       } else {
         micError.value = result.error || '没有识别到内容，请靠近麦克风再说一次'
       }
@@ -385,9 +384,9 @@ function formatMessageHtml(raw: string): string {
   width: min(920px, 100%);
   margin: 0 auto;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 8px;
-  padding: 10px 10px 10px 16px;
+  padding: 8px 10px 8px 18px;
   border: 0;
   border-radius: 22px;
   background: var(--agent-surface);
@@ -396,7 +395,7 @@ function formatMessageHtml(raw: string): string {
 
 .composer-input {
   flex: 1;
-  min-height: 24px;
+  min-height: 34px;
   max-height: 160px;
   resize: none;
   border: none;
@@ -405,7 +404,9 @@ function formatMessageHtml(raw: string): string {
   color: var(--agent-text);
   font: inherit;
   font-size: 15px;
-  line-height: 1.5;
+  line-height: 1.45;
+  padding: 7px 10px 7px 2px;
+  box-sizing: border-box;
   user-select: text;
 }
 
