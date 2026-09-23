@@ -1,6 +1,7 @@
 {
   "source": "live2d-fairy/无第7层圆环的fiary.png",
   "orb_source": "live2d-fairy/第四层白环.png",
+  "background_source": "live2d-fairy/底层背景.png",
   "canvas": [
     873,
     940
@@ -74,6 +75,7 @@
   "rules": {
     "layer_01": "omitted in renderer",
     "layer_02": "clockwise rotation",
+    "background": "static panoramic plate",
     "layer_03_to_layer_07": "translate as one eye-white group",
     "breathing_layers": [
       "layer_03",
@@ -89,6 +91,13 @@
     "pupil_base_r": 118.188,
     "r6_outer": 88.03,
     "breath_min": 0.975,
+    "background": {
+      "size": [
+        1925,
+        817
+      ],
+      "mode": "RGBA"
+    },
     "layer_01": {
       "visible_pixels": 217599,
       "transparent_pixels": 603021

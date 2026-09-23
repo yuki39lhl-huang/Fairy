@@ -28,7 +28,7 @@ const BREATH_MAX = 1.025
 const BREATH_PERIOD_MS = 2000
 const ROTATION_PER_MS = (Math.PI * 2) / 13000 // one revolution per 13 s
 const EYEWHITE_GAZE_OFFSET = 14
-const ASSET_VER = 'v4-orbfree5'
+const ASSET_VER = 'v4-static-bg1'
 
 /** L1（最外软光环）按设计省略，不再加载。 */
 const LAYER_NAMES = [

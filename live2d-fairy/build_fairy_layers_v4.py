@@ -226,9 +226,8 @@ def main() -> None:
     QA_OUTPUT.mkdir(parents=True, exist_ok=True)
     source.save(QA_OUTPUT / "source_registered.png")
 
-    background = ImageOps.fit(
-        Image.open(BACKGROUND_SOURCE).convert("RGBA"), (W, H), Image.Resampling.LANCZOS
-    )
+    # Panoramic plate at native aspect; runtime cover-scales it to the window.
+    background = Image.open(BACKGROUND_SOURCE).convert("RGBA")
     background.save(OUTPUT / "background.png")
 
     layers: dict[str, Image.Image] = {}
@@ -238,6 +237,7 @@ def main() -> None:
         "pupil_base_r": round(PUPIL_BASE_R, 3),
         "r6_outer": round(R6_OUTER, 2),
         "breath_min": BREATH_MIN,
+        "background": {"size": list(background.size), "mode": background.mode},
     }
     ring_source = fill_ring_inward(source)
     ring_source.save(QA_OUTPUT / "source_ring_filled.png")
@@ -255,11 +255,15 @@ def main() -> None:
     orb.save(OUTPUT / "layer_07.png")
 
     angle = math.atan2(PUPIL_Y - CY, PUPIL_X - CX)
+    PREVIEW_W, PREVIEW_H = 1280, 800
+    EYE_FIT = 0.62
     for label, factor in (("static", 1.0), ("breath_min", BREATH_MIN), ("breath_max", BREATH_MAX)):
-        preview = background.copy()
+        preview = ImageOps.fit(background, (PREVIEW_W, PREVIEW_H), Image.Resampling.LANCZOS)
+        eye_scale = (min(PREVIEW_W, PREVIEW_H) * EYE_FIT) / H
+        eye = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         for name in LAYER_NAMES:
             if name == "layer_01":
-                continue  # renderer omits L1
+                continue
             layer = layers[name]
             if name in {"layer_03", "layer_06"}:
                 layer = scale_about_center(layer, factor)
@@ -270,12 +274,18 @@ def main() -> None:
                 dy = round(CY + math.sin(angle) * rim - PUPIL_Y)
                 placed.alpha_composite(layer, (dx, dy))
                 layer = placed
-            preview.alpha_composite(layer)
+            eye.alpha_composite(layer)
+        ew, eh = round(W * eye_scale), round(H * eye_scale)
+        eye_scaled = eye.resize((ew, eh), Image.Resampling.LANCZOS)
+        ox = round(PREVIEW_W / 2 - CX * eye_scale)
+        oy = round(PREVIEW_H / 2 - CY * eye_scale)
+        preview.alpha_composite(eye_scaled, (ox, oy))
         preview.save(QA_OUTPUT / f"preview_{label}.png")
 
     meta = {
         "source": str(SOURCE.relative_to(ROOT)).replace("\\", "/"),
         "orb_source": str(ORB_SOURCE.relative_to(ROOT)).replace("\\", "/"),
+        "background_source": str(BACKGROUND_SOURCE.relative_to(ROOT)).replace("\\", "/"),
         "canvas": [W, H],
         "center": [CX, CY],
         "layer_07_orb": [PUPIL_X, PUPIL_Y, PUPIL_R],
@@ -286,6 +296,7 @@ def main() -> None:
         "rules": {
             "layer_01": "omitted in renderer",
             "layer_02": "clockwise rotation",
+            "background": "static panoramic plate",
             "layer_03_to_layer_07": "translate as one eye-white group",
             "breathing_layers": ["layer_03", "layer_06"],
             "layer_04": "light-blue band, unscaled",
