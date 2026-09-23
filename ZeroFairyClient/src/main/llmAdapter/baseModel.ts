@@ -37,7 +37,8 @@ export abstract class BaseModel {
     abstract chatStream(
         messages: ChatMessage[],
         callbacks: StreamChunkCallback,
-        tools?: object[]
+        tools?: object[],
+        options?: { toolChoice?: 'auto' | 'none' }
     ): Promise<void>
 
     hasApiKey(): boolean {

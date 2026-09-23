@@ -1,40 +1,34 @@
-<!-- src/renderer/src/views/IndexChat.vue -->
-<!-- 主聊天页面：消息列表 + 底部输入框 -->
+<!-- Main chat: clean agent conversation surface (no decorative background). -->
 <script setup lang="ts">
-import { ref, nextTick, computed } from 'vue'
+import { ref, nextTick, computed, watch } from 'vue'
 import { useChatStore } from '../stores/chatStore'
 import { useLlmStore } from '../stores/llmStore'
-import { useRouter } from 'vue-router'
 import { startRecording, stopRecording } from '../services/micRecorder'
-
 
 const chatStore = useChatStore()
 const llmStore = useLlmStore()
-const router = useRouter()
 
 const inputText = ref('')
 const messagesEl = ref<HTMLElement>()
-
-// 麦克风状态机：idle待机 -> recording录音中 -> transcribing识别中 -> 回到idle
 const micState = ref<'idle' | 'recording' | 'transcribing'>('idle')
 const micError = ref('')
 
 const micButtonTitle = computed(() => {
   if (micState.value === 'recording') return '点击结束录音'
   if (micState.value === 'transcribing') return '识别中，请稍候'
-  return '点击开始说话'
+  return '语音输入'
 })
 
-// 合并消息列表：已完成的消息 + 正在流式输出的消息
 const displayMessages = computed(() => {
   const msgs = [...chatStore.messages]
   if (chatStore.streamingContent) {
-    msgs.push({ role: 'assistant', content: chatStore.streamingContent })
+    msgs.push({ role: 'assistant' as const, content: chatStore.streamingContent })
   }
   return msgs
 })
 
-// 滚动到底部
+const isEmpty = computed(() => displayMessages.value.length === 0)
+
 async function scrollToBottom(): Promise<void> {
   await nextTick()
   if (messagesEl.value) {
@@ -42,7 +36,17 @@ async function scrollToBottom(): Promise<void> {
   }
 }
 
-// 发送消息 --这里会导致界面卡在"生成中"
+watch(displayMessages, () => {
+  void scrollToBottom()
+})
+
+watch(
+  () => llmStore.statusText,
+  () => {
+    if (llmStore.isGenerating) void scrollToBottom()
+  }
+)
+
 async function sendMessage(): Promise<void> {
   const text = inputText.value.trim()
   if (!text || llmStore.isGenerating) return
@@ -50,15 +54,12 @@ async function sendMessage(): Promise<void> {
   inputText.value = ''
   chatStore.addMessage('user', text)
   llmStore.setGenerating(true)
-
   await scrollToBottom()
 
-  const history = chatStore.messages
-    .slice(0, -1)
-    .map((msg) => ({
-      role: msg.role,
-      content: msg.content
-    }))
+  const history = chatStore.messages.slice(0, -1).map((msg) => ({
+    role: msg.role,
+    content: msg.content
+  }))
 
   try {
     await window.api.sendMessage(text, history)
@@ -69,7 +70,6 @@ async function sendMessage(): Promise<void> {
   await scrollToBottom()
 }
 
-// 麦克风按钮：idle时开始录音，recording时结束录音并触发识别
 async function handleMicClick(): Promise<void> {
   if (micState.value === 'idle') {
     micError.value = ''
@@ -87,10 +87,9 @@ async function handleMicClick(): Promise<void> {
     try {
       const audioData = await stopRecording()
       const result = await window.api.transcribeRecording(audioData)
-
       if (result.success && result.text.trim()) {
         inputText.value = result.text.trim()
-        await sendMessage() // 识别成功后，走跟手动打字完全一样的发送路径
+        await sendMessage()
       } else {
         micError.value = result.error || '没有识别到内容，请靠近麦克风再说一次'
       }
@@ -102,492 +101,397 @@ async function handleMicClick(): Promise<void> {
   }
 }
 
-// 按 Enter 发送（Shift+Enter 换行）
 function handleKeydown(e: KeyboardEvent): void {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
-    sendMessage()
+    void sendMessage()
   }
 }
 
-function handleOpenVoiceCall(): void {
-  window.api.openVoiceCallWindow()
+/** 轻量 Markdown：加粗 / 列表感 / 换行，避免裸 ** 与挤成一团 */
+function formatMessageHtml(raw: string): string {
+  const escaped = raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  return escaped
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/^[-*] (.+)$/gm, '<span class="md-li">$1</span>')
+    .replace(/\n{2,}/g, '<br /><br />')
+    .replace(/\n/g, '<br />')
 }
+
 </script>
 
 <template>
-  <div class="chat-page">
-    <!-- 顶部导航栏 -->
-    <div class="top-bar">
-      <div class="top-bar-title">
-        <span class="fairy-dot"></span>
-        <span>Fairy</span>
-        <span class="fairy-sub">· 新艾利都最强智能管家 </span>
-      </div>
-      <button class="config-btn" @click="router.push('/config')">
-        ⚙ 设置
-      </button>
-      <button class="config-btn" @click="handleOpenVoiceCall">📞 通话</button>
-    </div>
+  <div class="chat">
+    <header class="top">
+      <div class="top-hint">新艾利都智能管家</div>
+    </header>
 
-    <!-- 消息列表区域 -->
-    <div ref="messagesEl" class="messages-area">
-      <!-- 空状态：没有消息时显示 Fairy logo -->
-      <div v-if="displayMessages.length === 0" class="empty-state">
-        <div class="fairy-logo">
-          <div class="logo-ring ring-1"></div>
-          <div class="logo-ring ring-2"></div>
-          <div class="logo-ring ring-3"></div>
-          <div class="logo-core"></div>
-        </div>
-        <p class="empty-tip">主人，有什么需要我帮忙的吗？</p>
+    <div ref="messagesEl" class="thread">
+      <div v-if="isEmpty" class="hero">
+        <h1 class="hero-title">今天想聊点什么？</h1>
+        <p class="hero-sub">直接提问，或用下方输入框开始新对话。</p>
       </div>
 
-      <!-- 消息列表 -->
-      <div v-for="(msg, index) in displayMessages" :key="index"
-        :class="['message-row', msg.role === 'user' ? 'user-row' : 'fairy-row']">
-        <!-- Fairy 头像 -->
-        <div v-if="msg.role === 'assistant'" class="avatar fairy-avatar">
-          <div class="avatar-inner"></div>
+      <div v-else class="thread-inner">
+        <div
+          v-for="(msg, index) in displayMessages"
+          :key="index"
+          :class="['row', msg.role === 'user' ? 'row-user' : 'row-assistant']"
+        >
+          <div v-if="msg.role === 'assistant'" class="role">Fairy</div>
+          <div :class="['bubble', msg.role === 'user' ? 'bubble-user' : 'bubble-assistant']">
+            <p
+              v-if="msg.role === 'user'"
+              class="bubble-text"
+            >{{ msg.content }}</p>
+            <div
+              v-else
+              class="bubble-text md"
+              v-html="formatMessageHtml(msg.content)"
+            />
+            <span
+              v-if="msg.role === 'assistant' && llmStore.isGenerating && index === displayMessages.length - 1"
+              class="cursor"
+              >▍</span
+            >
+          </div>
         </div>
 
-        <!-- 消息气泡 -->
-        <div :class="['bubble', msg.role === 'user' ? 'user-bubble' : 'fairy-bubble']">
-          {{ msg.content }}
-          <!-- 流式输出光标 -->
-          <span v-if="msg.role === 'assistant' && llmStore.isGenerating && index === displayMessages.length - 1"
-            class="cursor-blink">▋</span>
+        <div
+          v-if="llmStore.isGenerating && !chatStore.streamingContent"
+          class="status-row"
+        >
+          <span class="status-dot" />
+          <span class="status-text">{{ llmStore.statusText || 'Fairy 思考中…' }}</span>
         </div>
-
-        <!-- 用户头像 -->
-        <div v-if="msg.role === 'user'" class="avatar user-avatar">法厄同</div>
       </div>
     </div>
 
-    <!-- 底部输入区域 -->
-    <!-- 底部输入区域 -->
-    <div class="input-area">
-      <textarea v-model="inputText" class="chat-input" placeholder="和 Fairy 说点什么… (Enter 发送，Shift+Enter 换行)" rows="1"
-        :disabled="llmStore.isGenerating || micState !== 'idle'" @keydown="handleKeydown"></textarea>
-      <button class="mic-btn"
-        :class="{ 'mic-recording': micState === 'recording', 'mic-busy': micState === 'transcribing' }"
-        :disabled="llmStore.isGenerating || micState === 'transcribing'" :title="micButtonTitle"
-        @click="handleMicClick">
-        <span v-if="micState === 'recording'">● 录音中</span>
-        <span v-else-if="micState === 'transcribing'">识别中…</span>
-        <span v-else>🎤</span>
-      </button>
-      <button class="send-btn" :disabled="llmStore.isGenerating || !inputText.trim() || micState !== 'idle'"
-        @click="sendMessage">
-        <span v-if="llmStore.isGenerating">生成中…</span>
-        <span v-else>发送</span>
-      </button>
+    <div class="composer-wrap">
+      <div class="composer">
+        <textarea
+          v-model="inputText"
+          class="composer-input"
+          rows="1"
+          placeholder="给 Fairy 发消息"
+          :disabled="llmStore.isGenerating || micState !== 'idle'"
+          @keydown="handleKeydown"
+        />
+        <div class="composer-actions">
+          <button
+            type="button"
+            class="icon-btn"
+            :class="{ live: micState === 'recording', busy: micState === 'transcribing' }"
+            :disabled="llmStore.isGenerating || micState === 'transcribing'"
+            :title="micButtonTitle"
+            @click="handleMicClick"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="9" y="3" width="6" height="10" rx="3" fill="none" stroke="currentColor" stroke-width="1.6" />
+              <path d="M6 12a6 6 0 0 0 12 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              <path d="M12 18v3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="send-btn"
+            :disabled="llmStore.isGenerating || !inputText.trim() || micState !== 'idle'"
+            @click="sendMessage"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <p v-if="micError" class="error">{{ micError }}</p>
+      <p v-else class="footnote">Enter 发送 · Shift+Enter 换行</p>
     </div>
-    <p v-if="micError" class="mic-error">{{ micError }}</p>
   </div>
 </template>
 
 <style scoped>
-/* 页面整体：深色赛博背景 */
-.chat-page {
+.chat {
+  height: 100%;
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  background: #0a0e1a;
-  color: #e2e8f0;
-  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: var(--agent-bg);
 }
 
-/* 顶部导航栏 */
-.top-bar {
+.top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px 20px;
-  background: rgba(15, 23, 42, 0.9);
-  border-bottom: 1px solid rgba(56, 189, 248, 0.2);
-  backdrop-filter: blur(12px);
-  -webkit-app-region: drag;
-  /* 允许拖动窗口 */
+  justify-content: flex-end;
+  padding: 14px 28px 8px;
+  min-height: 40px;
 }
 
-.top-bar-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 1px;
-  color: #7dd3fc;
-}
-
-.fairy-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #38bdf8;
-  box-shadow: 0 0 8px #38bdf8;
-  animation: pulse 2s infinite;
-}
-
-.fairy-sub {
+.top-hint {
   font-size: 12px;
-  color: #475569;
-  font-weight: 400;
+  color: var(--agent-text-dim);
 }
 
-.config-btn {
-  -webkit-app-region: no-drag;
-  padding: 4px 12px;
-  background: rgba(56, 189, 248, 0.1);
-  border: 1px solid rgba(56, 189, 248, 0.3);
-  border-radius: 6px;
-  color: #7dd3fc;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.config-btn:hover {
-  background: rgba(56, 189, 248, 0.2);
-  border-color: #38bdf8;
-}
-
-/* 消息列表区域 */
-.messages-area {
+.thread {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(56, 189, 248, 0.3) transparent;
+  padding: 8px 24px 12px;
 }
 
-/* 空状态 Fairy logo（仿绝区零同心圆光效） */
-.empty-state {
+.hero {
+  min-height: 58%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  flex: 1;
-  gap: 32px;
-  position: relative;
-}
-
-/* 蓝色光晕背景 */
-.empty-state::before {
-  content: '';
-  position: absolute;
-  width: 400px;
-  height: 400px;
-  background: radial-gradient(circle, rgba(56, 189, 248, 0.15) 0%, rgba(56, 189, 248, 0.05) 40%, transparent 70%);
-  border-radius: 50%;
-  pointer-events: none;
-}
-
-.fairy-logo {
-  position: relative;
-  width: 200px;
-  height: 200px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.logo-ring {
-  position: absolute;
-  border-radius: 50%;
-  border: 1.5px solid rgba(180, 220, 255, 0.5);
-}
-
-.ring-1 {
-  width: 200px;
-  height: 200px;
-  border-color: rgba(100, 180, 255, 0.25);
-  animation: spin-slow 12s linear infinite;
-}
-
-.ring-2 {
-  width: 155px;
-  height: 155px;
-  border-color: rgba(150, 210, 255, 0.45);
-  animation: spin-slow 8s linear infinite reverse;
-}
-
-.ring-3 {
-  width: 110px;
-  height: 110px;
-  border-color: rgba(200, 235, 255, 0.65);
-  animation: spin-slow 5s linear infinite;
-}
-
-/* 内部螺旋效果（用伪元素模拟） */
-.ring-3::before {
-  content: '';
-  position: absolute;
-  width: 70px;
-  height: 70px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(220, 240, 255, 0.8);
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-}
-
-.logo-core {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: radial-gradient(circle, #ffffff, #7dd3fc);
-  box-shadow:
-    0 0 15px #ffffff,
-    0 0 30px #38bdf8,
-    0 0 60px rgba(56, 189, 248, 0.4);
-  z-index: 1;
-}
-
-.empty-tip {
-  color: #64748b;
-  font-size: 14px;
-  letter-spacing: 2px;
-  z-index: 1;
-}
-
-/* 消息行 */
-.message-row {
-  display: flex;
-  align-items: flex-end;
   gap: 10px;
-}
-
-.user-row {
-  flex-direction: row-reverse;
-}
-
-.fairy-row {
-  flex-direction: row;
-}
-
-/* 头像 */
-.avatar {
-  width: 40px;
-  height: 32px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.fairy-avatar {
-  background: rgba(15, 23, 42, 0.8);
-  border: 1px solid rgba(56, 189, 248, 0.5);
-}
-
-.avatar-inner {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: radial-gradient(circle, #7dd3fc, #0369a1);
-  box-shadow: 0 0 8px #38bdf8;
-}
-
-.user-avatar {
-  background: rgba(99, 102, 241, 0.3);
-  border: 1px solid rgba(99, 102, 241, 0.5);
-  color: #a5b4fc;
-}
-
-/* 消息气泡 */
-.bubble {
-  max-width: 65%;
-  padding: 10px 14px;
-  border-radius: 12px;
-  font-size: 14px;
-  line-height: 1.6;
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-
-.fairy-bubble {
-  background: rgba(15, 23, 42, 0.8);
-  border: 1px solid rgba(56, 189, 248, 0.2);
-  color: #cbd5e1;
-  border-radius: 2px 12px 12px 12px;
-  backdrop-filter: blur(8px);
-}
-
-.user-bubble {
-  background: rgba(56, 189, 248, 0.15);
-  border: 1px solid rgba(56, 189, 248, 0.3);
-  color: #e2e8f0;
-  border-radius: 12px 2px 12px 12px;
-}
-
-/* 流式输出光标 */
-.cursor-blink {
-  color: #38bdf8;
-  animation: blink 1s infinite;
-}
-
-/* 底部输入区 */
-.input-area {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  padding: 12px 16px;
-  background: rgba(15, 23, 42, 0.9);
-  border-top: 1px solid rgba(56, 189, 248, 0.15);
-  backdrop-filter: blur(12px);
-}
-
-.chat-input {
-  flex: 1;
-  background: rgba(30, 41, 59, 0.8);
-  border: 1px solid rgba(56, 189, 248, 0.2);
-  border-radius: 10px;
-  color: #e2e8f0;
-  font-size: 14px;
-  padding: 10px 14px;
-  resize: none;
-  outline: none;
-  font-family: inherit;
-  transition: border-color 0.2s;
-  max-height: 120px;
-  overflow-y: auto;
-}
-
-.chat-input:focus {
-  border-color: rgba(56, 189, 248, 0.5);
-  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.1);
-}
-
-.chat-input:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.chat-input::placeholder {
-  color: #334155;
-}
-
-.send-btn {
-  padding: 10px 20px;
-  background: linear-gradient(135deg, #0369a1, #0284c7);
-  border: 1px solid rgba(56, 189, 248, 0.4);
-  border-radius: 10px;
-  color: #e0f2fe;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-  letter-spacing: 0.5px;
-}
-
-.send-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, #0284c7, #0ea5e9);
-  box-shadow: 0 0 12px rgba(56, 189, 248, 0.3);
-}
-
-.send-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* 动画 */
-@keyframes pulse {
-
-  0%,
-  100% {
-    opacity: 1;
-    box-shadow: 0 0 8px #38bdf8;
-  }
-
-  50% {
-    opacity: 0.5;
-    box-shadow: 0 0 4px #38bdf8;
-  }
-}
-
-@keyframes spin-slow {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes blink {
-
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0;
-  }
-}
-
-.mic-btn {
-  padding: 10px 14px;
-  background: rgba(30, 41, 59, 0.8);
-  border: 1px solid rgba(56, 189, 248, 0.2);
-  border-radius: 10px;
-  color: #7dd3fc;
-  font-size: 16px;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-}
-
-.mic-btn:hover:not(:disabled) {
-  border-color: rgba(56, 189, 248, 0.5);
-}
-
-.mic-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.mic-btn.mic-recording {
-  background: rgba(239, 68, 68, 0.15);
-  border-color: rgba(239, 68, 68, 0.5);
-  color: #fca5a5;
-  font-size: 13px;
-  animation: mic-pulse 1.5s infinite;
-}
-
-.mic-btn.mic-busy {
-  font-size: 13px;
-  opacity: 0.6;
-  cursor: wait;
-}
-
-.mic-error {
-  margin: 0;
-  padding: 4px 16px 0;
-  font-size: 12px;
-  color: #fca5a5;
   text-align: center;
 }
 
-@keyframes mic-pulse {
+.hero-title {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--agent-text);
+}
 
+.hero-sub {
+  font-size: 14px;
+  color: var(--agent-text-dim);
+}
+
+.thread-inner {
+  width: min(920px, 100%);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 12px 0 24px;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.row-user {
+  align-items: flex-end;
+}
+
+.row-assistant {
+  align-items: flex-start;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px 8px;
+  color: var(--agent-text-dim);
+  font-size: 13px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--agent-accent);
+  animation: status-pulse 1.1s ease-in-out infinite;
+}
+
+.status-text {
+  letter-spacing: 0.01em;
+}
+
+@keyframes status-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+    opacity: 0.35;
+    transform: scale(0.85);
   }
-
   50% {
-    box-shadow: 0 0 0 6px rgba(239, 68, 68, 0);
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.role {
+  font-size: 12px;
+  color: var(--agent-text-dim);
+  padding-left: 2px;
+}
+
+.bubble {
+  max-width: min(820px, 100%);
+  user-select: text;
+}
+
+.bubble-user {
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: var(--agent-user-bubble);
+}
+
+.bubble-assistant {
+  padding: 2px 0;
+}
+
+.bubble-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--agent-text);
+}
+
+.bubble-text.md {
+  white-space: normal;
+}
+
+.bubble-text.md :deep(strong) {
+  font-weight: 650;
+  color: var(--agent-text);
+}
+
+.bubble-text.md :deep(.md-li) {
+  display: block;
+  padding-left: 0.9em;
+  position: relative;
+  margin: 0.2em 0;
+}
+
+.bubble-text.md :deep(.md-li)::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: var(--agent-text-dim);
+}
+
+.cursor {
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--agent-text-dim);
+  animation: blink 1s step-end infinite;
+}
+
+.composer-wrap {
+  padding: 8px 24px 18px;
+}
+
+.composer {
+  width: min(920px, 100%);
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 10px 10px 16px;
+  border: 0;
+  border-radius: 22px;
+  background: var(--agent-surface);
+  box-shadow: var(--agent-elevation-soft);
+}
+
+.composer-input {
+  flex: 1;
+  min-height: 24px;
+  max-height: 160px;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--agent-text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.composer-input::placeholder {
+  color: var(--agent-text-dim);
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.icon-btn,
+.send-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.icon-btn {
+  background: transparent;
+  color: var(--agent-text-mid);
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--agent-surface-2);
+  color: var(--agent-text);
+}
+
+.icon-btn.live {
+  color: #ff6b6b;
+}
+
+.icon-btn.busy {
+  opacity: 0.55;
+}
+
+.icon-btn svg,
+.send-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.send-btn {
+  background: var(--agent-send);
+  color: var(--agent-send-fg);
+}
+
+.send-btn:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+.send-btn:disabled,
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.footnote,
+.error {
+  width: min(920px, 100%);
+  margin: 8px auto 0;
+  text-align: center;
+  font-size: 12px;
+}
+
+.footnote {
+  color: var(--agent-text-dim);
+}
+
+.error {
+  color: #f87171;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
   }
 }
 </style>

@@ -2,7 +2,7 @@
 
 > 用途：开新对话时，把这份文件发给 Claude，即可无缝衔接开发进度。
 > 权威依据：所有开发必须严格遵循项目根目录的《方案优化.pdf》，本文档不替代它，只记录实际进度和踩过的坑。
-> 上次同步：2026-09-22（此前存档停在阶段3/2026-07-05，实际代码已推进到阶段5）
+> 上次同步：2026-09-23（主聊天改为 Codex/ChatGPT 风格 Agent UI；FairyEyeCanvas 仅保留在语音通话窗）
 
 ---
 
@@ -10,9 +10,9 @@
 
 绝区零 Fairy 拟人桌面 AI 客户端，仿照 Bilibili UP主 Playa0 的开源项目"昔涟"。核心是 Live2D 情绪神态交互 + Fairy 专属强约束人设对话 + 多模型插件适配。
 
-**技术栈**：Electron + Electron-Vite + TypeScript，Vue3 + Pinia + VueRouter，PixiJS + Live2D（`@naari3/pixi-live2d-display`），sqlite3（better-sqlite3），DeepSeek API（beta端点），本地 GPT-SoVITS TTS，本地 whisper-cli STT。
+**技术栈**：Electron + Electron-Vite + TypeScript，Vue3 + Pinia + VueRouter，PixiJS（Fairy HDD 分层电子眼），sqlite3（better-sqlite3），DeepSeek API（beta端点），本地 GPT-SoVITS TTS，本地 whisper-cli STT。
 
-**开发者背景**：Yuki，有 Vue 经验、Java 背景，无 Electron/LLM API/Live2D 经验，需要逐步教学、小步推进。
+**开发者背景**：Yuki，有 Vue 经验、Java 背景，无 Electron/LLM API 经验，需要逐步教学、小步推进。
 
 ---
 
@@ -54,17 +54,19 @@
 - 详见根目录 `语音通话.md`（whisper-node → whisper-cli 决策记录）
 
 ### ✅ 阶段5：Fairy HDD 动态角色交互（主体完成，产品核心卖点）
-- **渲染对象**：Fairy 是 HDD 电子眼，不套用人形 Live2D 的眉眼或口型概念。通话页使用 `FairyEyeCanvas`（PixiJS 8）；旧 Hiyori `Live2dCanvas` 仅留作技术参考。
+- **渲染对象**：Fairy 是 HDD 电子眼，不套用人形 Live2D。主聊天页与通话页均使用 `FairyEyeCanvas`（PixiJS 8）；旧 Hiyori Live2D 链已移除。
 - **可靠资源管线**：`live2d-fairy/build_fairy_layers_v4.py` 从无球源图确定性切出 `public/fairy/layers_v4/`。每层 RGBA 且含透明像素；不再用 ComfyUI 生成运行时图层。
 - **固定分层契约**：不加载 L1；L2 仅顺时针旋转（约 13 s/圈）；L3–L7 作为同一 `eyeWhiteRoot` 一起平移注视；**仅 L3 与 L6 做呼吸缩放（2 s）**，L4、L5、L7 始终保持原比例。L7 贴 L6 外缘相切，不是可沿轨道移动的瞳孔。
 - **交互链路**：无交互 3 秒后开始待机扫视；`[emotion:xxx]` 改变眼白组的注视目标与 L2 转速；`BroadcastChannel('fairy-mouth-sync')` 的 TTS 振幅只增强允许缩放的 L3/L6。
 - **验收基线**：静态合成无多重圆盘叠影；L2 旋转时其余外层稳定；呼吸时只有 L3/L6 缩放；眼白位移不露黑缝。
 - **待完善**：接入 `docs/idle-dialogues/hdd-idle.md` 待机台词；TTS 路径配置化。
 
-### 🔶 阶段6：UI完整美化、配套管理页面（部分已有骨架，未收尾）
+### 🔶 阶段6：UI完整美化、配套管理页面（进行中）
 已有页面路由：`/chat` `/config` `/memory` `/worldbook` `/toolplugin` `/voice-call`
-- MemoryView / WorldBook / ToolPlugin / Config 已存在
-- 整体美化、与「主屏幕呈现的样子」设计对齐、管理页打磨仍待做
+- 主界面：`AppShell` 左侧导航 + 聊天主区，深灰 Agent 风格（参考 Codex/ChatGPT），**无电子眼背景**
+- 语音通话窗仍全屏使用 `FairyEyeCanvas`
+- MemoryView / WorldBook / ToolPlugin / Config 已挂入侧栏
+- 管理页视觉与侧栏体系统一对齐仍待打磨
 
 ### 🔲 阶段7：测试打包发布（未开始）
 
@@ -76,10 +78,13 @@
 
 2. **UTF-8流式解析乱码**：DeepSeek API的SSE流用 `chunk.toString()` 直接转会在多字节字符被TCP分包切断时产生乱码。必须用 Node.js 的 `StringDecoder` 类（`import { StringDecoder } from 'string_decoder'`）逐块解码。
 
-3. **DeepSeek V4 系列的DSML协议标签泄漏**：`deepseek-v4-flash` 模型在流式+工具调用组合场景下，有时会把内部协议标记（`<|DSML|tool_calls>`等）当作普通文字输出，尤其在**参数结构复杂（嵌套数组/对象）**时更容易触发。
+3. **DeepSeek V4 系列的DSML协议标签泄漏**：`deepseek-v4-flash` 模型在流式+工具调用组合场景下，有时会把内部协议标记（`<|DSML|tool_calls>` / `｜｜DSML｜｜` 等）当作普通文字输出，尤其在**参数结构复杂（嵌套数组/对象）**或**工具回传超长正文**时更容易触发。
    - 修复1：使用 `https://api.deepseek.com/beta` 端点
-   - 修复2：代码里做兜底检测，一旦 `onChunk` 内容包含 `DSML`/`invoke name`/`tool_calls>` 就拦截，不展示给用户
-   - 修复3（最重要）：**所有工具参数必须设计成扁平字符串结构，避免数组的数组这类嵌套**。例如Excel生成工具最初用 `headers: string[]` + `rows: string[][]` 两个数组参数会稳定触发泄漏，改成单一 `csvData: string`（CSV格式文本，工具内部自己split解析）后完全稳定。**这是一条对后续所有新工具都适用的设计原则。**
+   - 修复2：流式侧**剥离**协议片段后继续下发干净文本；**禁止**命中后永久静音后续 chunk
+   - 修复3（最重要）：**所有工具参数必须设计成扁平字符串结构，避免数组的数组这类嵌套**
+   - 修复4：`web_search` 回传截断过长 snippet（约 600 字/条）
+   - 修复5：工具执行后的跟进轮加 system 约束 + `tool_choice: 'none'`；若剥离后正文过短则再补一轮自然语言重试
+   - 修复6：content 泄漏的完整 DSML/`<calls>` 工具块整段拦截，解析为正式 tool_calls 执行，绝不把 `<invoke>` 原文展示给用户
 
 4. **chatStream的Promise时序bug**：早期实现里，`chatStream` 方法在HTTP流刚建立连接时就return了，不会等流真正结束。这导致任何"调用chatStream后立刻读取拼接结果"的代码（如翻译工具）会读到空字符串。修复：把整个流程包进 `new Promise<void>((resolve) => {...})`，只有流真正的 `finalize()`（对应 `[DONE]` 或 `end` 事件）触发时才 `resolve()`。
 

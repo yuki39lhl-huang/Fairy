@@ -35,7 +35,20 @@ onMounted(() => {
     switch (event.type) {
       case 'ai:text-chunk': {
         const payload = event.payload as { text: string }
+        llmStore.setStreaming()
         chatStore.appendStreamChunk(payload.text)
+        break
+      }
+      case 'ai:tool-call': {
+        const payload = event.payload as { tools?: string[] }
+        llmStore.setTools(payload.tools ?? [])
+        break
+      }
+      case 'ai:status': {
+        const payload = event.payload as { phase?: string; tools?: string[] }
+        if (payload.phase === 'thinking') llmStore.setThinking()
+        else if (payload.phase === 'tools') llmStore.setTools(payload.tools ?? [])
+        else if (payload.phase === 'streaming') llmStore.setStreaming()
         break
       }
       case 'ai:emotion': {

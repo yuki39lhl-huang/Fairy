@@ -40,6 +40,46 @@ const api = {
     }
   },
 
+  onFairyFloatShow: (callback: (payload: { text?: string }) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { text?: string }): void => {
+      callback(payload)
+    }
+    ipcRenderer.on('fairy-float:show', listener)
+    return () => {
+      ipcRenderer.removeListener('fairy-float:show', listener)
+    }
+  },
+
+  onFairyFloatHide: (callback: () => void): (() => void) => {
+    const listener = (): void => {
+      callback()
+    }
+    ipcRenderer.on('fairy-float:hide', listener)
+    return () => {
+      ipcRenderer.removeListener('fairy-float:hide', listener)
+    }
+  },
+
+  onFairyFloatAudio: (
+    callback: (payload: { audioData: Uint8Array }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: { audioData: Uint8Array }
+    ): void => {
+      callback(payload)
+    }
+    ipcRenderer.on('fairy-float:audio', listener)
+    return () => {
+      ipcRenderer.removeListener('fairy-float:audio', listener)
+    }
+  },
+
+  notifyFairyFloatReady: (): Promise<void> => ipcRenderer.invoke('fairy-float:ready'),
+
+  notifyFairyFloatSpeechEnded: (): Promise<void> =>
+    ipcRenderer.invoke('fairy-float:speech-ended'),
+
   transcribeSpeech: (
     audioPath: string
   ): Promise<{ success: boolean; text: string; error?: string }> =>
@@ -49,7 +89,34 @@ const api = {
     audioData: Uint8Array,
     options?: { debugSave?: boolean; stats?: unknown }
   ): Promise<{ success: boolean; text: string; error?: string; stats?: unknown; debugPath?: string }> =>
-    ipcRenderer.invoke('whisper:transcribe-recording', audioData, options)
+    ipcRenderer.invoke('whisper:transcribe-recording', audioData, options),
+
+  listReminders: (): Promise<
+    Array<{
+      id: string
+      message: string
+      createdAt: number
+      fireAt: number
+      status: 'pending' | 'fired' | 'cancelled'
+      source?: 'manual' | 'fairy'
+    }>
+  > => ipcRenderer.invoke('reminders:list'),
+
+  cancelReminder: (id: string): Promise<boolean> => ipcRenderer.invoke('reminders:cancel', id),
+
+  clearFinishedReminders: (): Promise<number> => ipcRenderer.invoke('reminders:clear-finished'),
+
+  createReminder: (payload: {
+    message: string
+    delaySeconds: number
+  }): Promise<{
+    id: string
+    message: string
+    createdAt: number
+    fireAt: number
+    status: 'pending' | 'fired' | 'cancelled'
+    source?: 'manual' | 'fairy'
+  }> => ipcRenderer.invoke('reminders:create', payload)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

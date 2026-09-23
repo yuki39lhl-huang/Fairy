@@ -9,9 +9,11 @@ export type AgUiEventType =
     | 'ai:text-chunk'
     | 'ai:emotion'
     | 'ai:tool-call'
+    | 'ai:status'
     | 'ai:audio-ready'
     | 'ai:done'
     | 'ai:error'
+    | 'reminder:changed'
 
 export interface AgUiEvent {
     type: AgUiEventType

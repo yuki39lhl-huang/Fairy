@@ -1,42 +1,24 @@
-<!-- src/renderer/src/views/Config.vue -->
+<!-- Settings: harness-style section rail + preference rows. -->
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 
-const router = useRouter()
+type SectionId = 'models' | 'search' | 'voice'
+
+const section = ref<SectionId>('models')
 const apiKey = ref('')
-const savedMask = ref('')  // 显示脱敏后的key
+const savedMask = ref('')
 const saving = ref(false)
-// Tavily 搜索配置
 const tavilyKey = ref('')
 const savedTavilyMask = ref('')
 const savingTavily = ref(false)
-//语音开关
 const voiceEnabled = ref(true)
 const voiceSaveToFile = ref(false)
 
-onMounted(async () => {
-  savedMask.value = await window.api.getApiKey('deepseek')
-  savedTavilyMask.value = await window.api.getApiKey('tavily')  // 新增
-})
-
-async function saveKey(): Promise<void> {
-  if (!apiKey.value.trim()) return
-  saving.value = true
-  await window.api.saveApiKey('deepseek', apiKey.value.trim())
-  savedMask.value = await window.api.getApiKey('deepseek')
-  apiKey.value = ''
-  saving.value = false
-}
-
-async function saveTavilyKey(): Promise<void> {
-  if (!tavilyKey.value.trim()) return
-  savingTavily.value = true
-  await window.api.saveApiKey('tavily', tavilyKey.value.trim())
-  savedTavilyMask.value = await window.api.getApiKey('tavily')
-  tavilyKey.value = ''
-  savingTavily.value = false
-}
+const sections: { id: SectionId; label: string; hint: string }[] = [
+  { id: 'models', label: '模型', hint: 'DeepSeek API' },
+  { id: 'search', label: '搜索', hint: 'Tavily 联网' },
+  { id: 'voice', label: '语音', hint: '播放与存档' }
+]
 
 onMounted(async () => {
   savedMask.value = await window.api.getApiKey('deepseek')
@@ -45,6 +27,30 @@ onMounted(async () => {
   voiceSaveToFile.value = await window.api.getVoiceSaveToFile()
 })
 
+async function saveKey(): Promise<void> {
+  if (!apiKey.value.trim()) return
+  saving.value = true
+  try {
+    await window.api.saveApiKey('deepseek', apiKey.value.trim())
+    savedMask.value = await window.api.getApiKey('deepseek')
+    apiKey.value = ''
+  } finally {
+    saving.value = false
+  }
+}
+
+async function saveTavilyKey(): Promise<void> {
+  if (!tavilyKey.value.trim()) return
+  savingTavily.value = true
+  try {
+    await window.api.saveApiKey('tavily', tavilyKey.value.trim())
+    savedTavilyMask.value = await window.api.getApiKey('tavily')
+    tavilyKey.value = ''
+  } finally {
+    savingTavily.value = false
+  }
+}
+
 async function onVoiceEnabledChange(): Promise<void> {
   await window.api.setVoiceEnabled(voiceEnabled.value)
 }
@@ -52,207 +58,375 @@ async function onVoiceEnabledChange(): Promise<void> {
 async function onVoiceSaveToFileChange(): Promise<void> {
   await window.api.setVoiceSaveToFile(voiceSaveToFile.value)
 }
-
-
 </script>
 
 <template>
-  <div class="config-page">
-    <div class="config-card">
-      <button class="back-btn" @click="router.push('/chat')">← 返回</button>
-      <h2 class="config-title">⚙ 配置</h2>
+  <div class="settings">
+    <aside class="rail">
+      <h1 class="rail-title">设置</h1>
+      <nav class="rail-nav">
+        <button
+          v-for="item in sections"
+          :key="item.id"
+          type="button"
+          class="rail-item"
+          :class="{ active: section === item.id }"
+          @click="section = item.id"
+        >
+          <span class="rail-label">{{ item.label }}</span>
+          <span class="rail-hint">{{ item.hint }}</span>
+        </button>
+      </nav>
+    </aside>
 
-      <div class="config-section">
-        <label class="config-label">DeepSeek API Key</label>
-        <p class="config-desc">
-          当前已保存：<span class="key-mask">{{ savedMask || '未配置' }}</span>
-        </p>
-        <div class="key-input-row">
-          <input v-model="apiKey" type="password" class="key-input" placeholder="sk-..." />
-          <button class="save-btn" :disabled="saving || !apiKey.trim()" @click="saveKey">
-            {{ saving ? '保存中…' : '保存' }}
-          </button>
+    <div class="pane">
+      <!-- Models -->
+      <section v-show="section === 'models'" class="pane-block">
+        <header class="pane-head">
+          <h2 class="pane-title">模型</h2>
+          <p class="pane-sub">配置 DeepSeek API，保存后立即可用，无需重启。</p>
+        </header>
+
+        <div class="field">
+          <div class="field-copy">
+            <div class="field-label">DeepSeek API Key</div>
+            <p class="field-desc">
+              状态：
+              <span class="status" :class="{ ok: !!savedMask }">
+                {{ savedMask || '未配置' }}
+              </span>
+            </p>
+          </div>
+          <div class="field-control">
+            <input
+              v-model="apiKey"
+              type="password"
+              class="input"
+              placeholder="sk-…"
+              autocomplete="off"
+              @keydown.enter="saveKey"
+            />
+            <button
+              type="button"
+              class="btn-save"
+              :disabled="saving || !apiKey.trim()"
+              @click="saveKey"
+            >
+              {{ saving ? '保存中…' : '保存' }}
+            </button>
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div class="config-section" style="margin-top: 24px">
-        <label class="config-label">Tavily 搜索 API Key（联网搜索功能）</label>
-        <p class="config-desc">
-          当前已保存：<span class="key-mask">{{ savedTavilyMask || '未配置' }}</span>
-        </p>
-        <div class="key-input-row">
-          <input v-model="tavilyKey" type="password" class="key-input" placeholder="tvly-..." />
-          <button class="save-btn" :disabled="savingTavily || !tavilyKey.trim()" @click="saveTavilyKey">
-            {{ savingTavily ? '保存中…' : '保存' }}
-          </button>
+      <!-- Search -->
+      <section v-show="section === 'search'" class="pane-block">
+        <header class="pane-head">
+          <h2 class="pane-title">搜索</h2>
+          <p class="pane-sub">Tavily 用于联网搜索；未配置时相关工具不可用。</p>
+        </header>
+
+        <div class="field">
+          <div class="field-copy">
+            <div class="field-label">Tavily API Key</div>
+            <p class="field-desc">
+              状态：
+              <span class="status" :class="{ ok: !!savedTavilyMask }">
+                {{ savedTavilyMask || '未配置' }}
+              </span>
+            </p>
+          </div>
+          <div class="field-control">
+            <input
+              v-model="tavilyKey"
+              type="password"
+              class="input"
+              placeholder="tvly-…"
+              autocomplete="off"
+              @keydown.enter="saveTavilyKey"
+            />
+            <button
+              type="button"
+              class="btn-save"
+              :disabled="savingTavily || !tavilyKey.trim()"
+              @click="saveTavilyKey"
+            >
+              {{ savingTavily ? '保存中…' : '保存' }}
+            </button>
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div class="config-section" style="margin-top: 24px">
-        <label class="config-label">语音自动播放</label>
-        <p class="config-desc">Fairy回复后自动合成语音并播放</p>
-        <label class="toggle-switch">
-          <input v-model="voiceEnabled" type="checkbox" @change="onVoiceEnabledChange" />
-          <span class="toggle-slider"></span>
-        </label>
-      </div>
+      <!-- Voice -->
+      <section v-show="section === 'voice'" class="pane-block">
+        <header class="pane-head">
+          <h2 class="pane-title">语音</h2>
+          <p class="pane-sub">控制回复后的语音合成与本地存档。</p>
+        </header>
 
-      <div v-if="voiceEnabled" class="config-section" style="margin-top: 24px">
-        <label class="config-label">同时保存语音文件到本地</label>
-        <p class="config-desc">开启后，每次生成的语音会额外存一份到"文档/ZeroFairyClient/语音"文件夹，且这轮会自动切换为整段合成（牺牲一点起播速度，换一份完整可用的音频文件）</p>
-        <label class="toggle-switch">
-          <input v-model="voiceSaveToFile" type="checkbox" @change="onVoiceSaveToFileChange" />
-          <span class="toggle-slider"></span>
-        </label>
-      </div>
+        <div class="field row">
+          <div class="field-copy">
+            <div class="field-label">语音自动播放</div>
+            <p class="field-desc">Fairy 回复后自动合成并播放语音。</p>
+          </div>
+          <label class="toggle">
+            <input v-model="voiceEnabled" type="checkbox" @change="onVoiceEnabledChange" />
+            <span class="toggle-track" />
+          </label>
+        </div>
+
+        <div v-if="voiceEnabled" class="field row">
+          <div class="field-copy">
+            <div class="field-label">同时保存语音文件</div>
+            <p class="field-desc">
+              额外存到「文档 / ZeroFairyClient / 语音」；本轮改为整段合成（起播稍慢，文件完整）。
+            </p>
+          </div>
+          <label class="toggle">
+            <input
+              v-model="voiceSaveToFile"
+              type="checkbox"
+              @change="onVoiceSaveToFileChange"
+            />
+            <span class="toggle-track" />
+          </label>
+        </div>
+      </section>
     </div>
   </div>
 </template>
 
 <style scoped>
-.config-page {
-  min-height: 100vh;
-  background: #0a0e1a;
+.settings {
+  height: 100%;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
+  background: var(--agent-bg);
+  color: var(--agent-text);
 }
 
-.config-card {
-  width: 100%;
-  max-width: 480px;
-  background: rgba(15, 23, 42, 0.9);
-  border: 1px solid rgba(56, 189, 248, 0.2);
-  border-radius: 16px;
-  padding: 32px;
-  backdrop-filter: blur(12px);
+.rail {
+  width: 200px;
+  flex-shrink: 0;
+  padding: 28px 14px 20px;
+  border-right: 0.5px solid var(--agent-border-strong);
+  background: var(--agent-sidebar);
 }
 
-.back-btn {
-  background: none;
-  border: none;
-  color: #475569;
-  cursor: pointer;
-  font-size: 13px;
-  padding: 0;
-  margin-bottom: 20px;
-}
-
-.back-btn:hover {
-  color: #7dd3fc;
-}
-
-.config-title {
-  color: #7dd3fc;
-  font-size: 18px;
+.rail-title {
+  margin: 0 10px 18px;
+  font-size: 15px;
   font-weight: 600;
-  margin-bottom: 28px;
-  letter-spacing: 1px;
+  letter-spacing: 0.01em;
 }
 
-.config-section {
+.rail-nav {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
 }
 
-.config-label {
-  color: #94a3b8;
+.rail-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--agent-text-mid);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail-item:hover {
+  background: var(--agent-sidebar-hover);
+  color: var(--agent-text);
+}
+
+.rail-item.active {
+  background: var(--agent-sidebar-active);
+  color: var(--agent-text);
+}
+
+.rail-label {
   font-size: 13px;
   font-weight: 500;
 }
 
-.config-desc {
-  color: #475569;
-  font-size: 12px;
+.rail-hint {
+  font-size: 11px;
+  color: var(--agent-text-dim);
 }
 
-.key-mask {
-  color: #38bdf8;
-  font-family: monospace;
-}
-
-.key-input-row {
-  display: flex;
-  gap: 10px;
-  margin-top: 4px;
-}
-
-.key-input {
+.pane {
   flex: 1;
-  background: rgba(30, 41, 59, 0.8);
-  border: 1px solid rgba(56, 189, 248, 0.2);
-  border-radius: 8px;
-  color: #e2e8f0;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 28px 36px 40px;
+}
+
+.pane-block {
+  width: min(640px, 100%);
+}
+
+.pane-head {
+  margin-bottom: 8px;
+  padding-bottom: 16px;
+  border-bottom: 0.5px solid var(--agent-border-strong);
+}
+
+.pane-title {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.pane-sub {
+  margin: 0;
   font-size: 13px;
-  padding: 8px 12px;
+  line-height: 1.5;
+  color: var(--agent-text-dim);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 0;
+  border-bottom: 0.5px solid var(--agent-border);
+}
+
+.field.row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.field-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.field-label {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.field-desc {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--agent-text-dim);
+}
+
+.status {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  color: var(--agent-text-mid);
+}
+
+.status.ok {
+  color: var(--agent-accent);
+}
+
+.field-control {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 12px;
+  border: 0.5px solid var(--agent-border-strong);
+  border-radius: 8px;
+  background: var(--agent-surface-2);
+  color: var(--agent-text);
+  font: inherit;
+  font-size: 13px;
   outline: none;
 }
 
-.key-input:focus {
-  border-color: rgba(56, 189, 248, 0.5);
+.input:focus {
+  border-color: var(--agent-accent);
 }
 
-.save-btn {
-  padding: 8px 18px;
-  background: linear-gradient(135deg, #0369a1, #0284c7);
-  border: 1px solid rgba(56, 189, 248, 0.4);
+.input::placeholder {
+  color: var(--agent-text-dim);
+}
+
+.btn-save {
+  appearance: none;
+  height: 34px;
+  padding: 0 14px;
+  border: none;
   border-radius: 8px;
-  color: #e0f2fe;
+  background: var(--agent-send);
+  color: var(--agent-send-fg);
+  font: inherit;
   font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
 }
 
-.save-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.btn-save:hover:not(:disabled) {
+  filter: brightness(0.94);
 }
 
-.toggle-switch {
+.btn-save:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.toggle {
   position: relative;
   display: inline-block;
-  width: 44px;
-  height: 24px;
-  margin-top: 4px;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
 }
 
-.toggle-switch input {
+.toggle input {
   opacity: 0;
   width: 0;
   height: 0;
 }
 
-.toggle-slider {
+.toggle-track {
   position: absolute;
   inset: 0;
   cursor: pointer;
-  background: rgba(30, 41, 59, 0.8);
-  border: 1px solid rgba(56, 189, 248, 0.2);
-  border-radius: 24px;
-  transition: 0.2s;
+  background: var(--agent-surface-3);
+  border: 0.5px solid var(--agent-border-strong);
+  border-radius: 999px;
+  transition: background 0.15s ease;
 }
 
-.toggle-slider::before {
-  position: absolute;
+.toggle-track::before {
   content: '';
-  height: 16px;
+  position: absolute;
   width: 16px;
-  left: 3px;
-  bottom: 3px;
-  background: #64748b;
+  height: 16px;
+  left: 2px;
+  top: 2px;
   border-radius: 50%;
-  transition: 0.2s;
+  background: var(--agent-text-mid);
+  transition: transform 0.15s ease, background 0.15s ease;
 }
 
-.toggle-switch input:checked+.toggle-slider {
-  background: linear-gradient(135deg, #0369a1, #0284c7);
-  border-color: rgba(56, 189, 248, 0.4);
+.toggle input:checked + .toggle-track {
+  background: var(--agent-accent);
+  border-color: transparent;
 }
 
-.toggle-switch input:checked+.toggle-slider::before {
-  transform: translateX(20px);
-  background: #e0f2fe;
+.toggle input:checked + .toggle-track::before {
+  transform: translateX(18px);
+  background: #fff;
 }
 </style>

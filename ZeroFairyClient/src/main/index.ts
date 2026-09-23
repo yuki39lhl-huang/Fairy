@@ -17,6 +17,14 @@ import { initAccountingTable } from './db/accounting'
 import { synthesizeSpeech } from './voice/ttsClient'
 import { transcribeSpeech } from './voice/whisperClient'
 import { createSentenceSegmenter } from './voice/sentenceSegmenter'
+import {
+  hydrateReminders,
+  listReminders,
+  cancelReminder,
+  clearFinishedReminders,
+  scheduleReminder
+} from './reminderSystem'
+import { showFairyFloat, onFairyFloatSpeechEnded, registerFairyFloatIpc } from './fairyFloatWindow'
 
 interface MicAudioStats {
   durationSec: number
@@ -209,10 +217,6 @@ function createWindow(): void {
     }
   })
 
-  if (is.dev) {
-    mainWindow.webContents.openDevTools({ mode: 'detach' })
-  }
-
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
     agentEventBus.register(mainWindow.webContents)
@@ -262,9 +266,6 @@ function createVoiceCallWindow(): void {
     if (voiceCallWindow) {
       agentEventBus.register(voiceCallWindow.webContents)
     }
-    if (is.dev) {
-      voiceCallWindow?.webContents.openDevTools({ mode: 'detach' })
-    }
   })
 
   voiceCallWindow.on('maximize', () => {
@@ -297,6 +298,7 @@ app.whenReady().then(() => {
   getDb()
   initAccountingTable() // 初始化会计表
   importWorldBookFromDocs()
+  hydrateReminders()
   electronApp.setAppUserModelId('com.electron')
 
   app.on('browser-window-created', (_, window) => {
@@ -337,6 +339,8 @@ app.whenReady().then(() => {
         const segmenter = useStreaming ? createSentenceSegmenter() : null
         const ttsQueue = useStreaming ? createStreamingTtsQueue() : null
 
+        agentEventBus.emit('ai:status', { phase: 'thinking' })
+
         const handleChunk = (chunk: string): void => {
           fullReply += chunk
           agentEventBus.emit('ai:text-chunk', { text: chunk })
@@ -356,6 +360,10 @@ app.whenReady().then(() => {
               try {
                 console.log('[Tool] 模型请求调用工具:', toolCalls.map(t => t.name))
                 agentEventBus.emit('ai:tool-call', { tools: toolCalls.map(t => t.name) })
+                agentEventBus.emit('ai:status', {
+                  phase: 'tools',
+                  tools: toolCalls.map((t) => t.name)
+                })
 
                 const toolResultMessages: ChatMessage[] = []
                 for (const call of toolCalls) {
@@ -365,7 +373,9 @@ app.whenReady().then(() => {
                     try {
                       const args = call.arguments ? JSON.parse(call.arguments) : {}
                       resultText = await tool.execute(args)
-                      console.log('[Tool] 执行结果:', call.name, '->', resultText)
+                      const preview =
+                        resultText.length > 160 ? `${resultText.slice(0, 160)}…` : resultText
+                      console.log('[Tool] 执行结果:', call.name, '->', preview)
                     } catch (err) {
                       resultText = `工具执行出错: ${err instanceof Error ? err.message : String(err)}`
                     }
@@ -377,22 +387,56 @@ app.whenReady().then(() => {
                   })
                 }
 
-                // 组装第二轮消息：原对话 + 模型的工具调用请求 + 工具执行结果
+                agentEventBus.emit('ai:status', { phase: 'thinking' })
+
+                // 组装第二轮：工具结果已就绪 → 强制自然语言，禁止再写 DSML
                 const followUpMessages: ChatMessage[] = [
-                  ...messages,
+                  ...messages.map((m, i) => {
+                    if (i === 0 && m.role === 'system') {
+                      return {
+                        ...m,
+                        content:
+                          m.content +
+                          '\n\n[本轮约束] 工具已执行完毕，结果已在上方 tool 消息中。请只用自然语言直接回答主人；严禁输出 DSML、tool_calls、invoke、XML/协议标签，也禁止再次调用任何工具。'
+                      }
+                    }
+                    return m
+                  }),
                   { role: 'assistant', content: '', tool_calls: toolCalls },
                   ...toolResultMessages
                 ]
 
-                // 第二次请求模型：这次它会依据真实工具结果生成自然语言回复
-                await adapter.chatStream(followUpMessages, {
+                const beforeLen = fullReply.length
+                const followUpCbs = {
                   onChunk: handleChunk,
                   onEmotion: forwardEmotionToRenderer,
-                  onDone: () => {
-                    finalizeAssistantTurn(text, fullReply, segmenter, ttsQueue)
-                  },
-                  onError: (err) => agentEventBus.emit('ai:error', { message: err.message })
+                  onDone: () => undefined,
+                  onError: (err: Error) => agentEventBus.emit('ai:error', { message: err.message })
+                }
+
+                await adapter.chatStream(followUpMessages, followUpCbs, undefined, {
+                  toolChoice: 'none'
                 })
+
+                // 跟进轮几乎没正文（协议泄漏被剥光）→ 硬约束再问一次
+                if (fullReply.length - beforeLen < 12) {
+                  console.warn('[DeepSeek] 跟进轮正文过短，发起自然语言重试')
+                  await adapter.chatStream(
+                    [
+                      ...followUpMessages,
+                      {
+                        role: 'user',
+                        content:
+                          '请根据上面的工具结果，用中文自然语言完整回答主人的问题。不要输出任何协议标记、标签或工具调用。'
+                      }
+                    ],
+                    followUpCbs,
+                    undefined,
+                    { toolChoice: 'none' }
+                  )
+                }
+
+                finalizeAssistantTurn(text, fullReply, segmenter, ttsQueue)
               } catch (err) {
                 const error = err instanceof Error ? err : new Error(String(err))
                 console.error('[Tool] 处理工具调用时出错:', error)
@@ -427,6 +471,21 @@ app.whenReady().then(() => {
     if (!key) return ''
     return key.substring(0, 4) + '****'
   })
+
+  ipcMain.handle('reminders:list', () => listReminders())
+  ipcMain.handle('reminders:cancel', (_event, id: string) => cancelReminder(id))
+  ipcMain.handle('reminders:clear-finished', () => clearFinishedReminders())
+  ipcMain.handle(
+    'reminders:create',
+    (_event, payload: { message: string; delaySeconds: number }) => {
+      const message = String(payload?.message ?? '').trim()
+      const delaySeconds = Number(payload?.delaySeconds)
+      if (!message || !Number.isFinite(delaySeconds) || delaySeconds <= 0) {
+        throw new Error('请填写提醒内容，并设置大于 0 的延时')
+      }
+      return scheduleReminder(message, delaySeconds, 'manual')
+    }
+  )
 
   ipcMain.handle('get-voice-enabled', () => {
     return storeManager.getVoiceEnabled()
@@ -528,6 +587,16 @@ app.whenReady().then(() => {
   )
 
   createWindow()
+
+  registerFairyFloatIpc()
+  ipcMain.handle('fairy-float:speech-ended', () => {
+    onFairyFloatSpeechEnded()
+  })
+
+  // 预热右上角浮窗，并朗读空闲提示（等一会儿让主窗口先起来）
+  setTimeout(() => {
+    void showFairyFloat('主人，我正处在空闲中。', { speak: true })
+  }, 800)
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

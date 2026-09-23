@@ -37,12 +37,40 @@ interface Api {
   toggleMaximizeVoiceCallWindow: () => Promise<boolean>
   isVoiceCallWindowMaximized: () => Promise<boolean>
   onVoiceCallWindowState: (callback: (state: { maximized: boolean }) => void) => () => void
+  onFairyFloatShow: (callback: (payload: { text?: string }) => void) => () => void
+  onFairyFloatHide: (callback: () => void) => () => void
+  onFairyFloatAudio: (callback: (payload: { audioData: Uint8Array }) => void) => () => void
+  notifyFairyFloatReady: () => Promise<void>
+  notifyFairyFloatSpeechEnded: () => Promise<void>
   transcribeSpeech: (audioPath: string) => Promise<TranscribeResult>
   openVoiceCallWindow: () => Promise<void>
   transcribeRecording: (
     audioData: Uint8Array,
     options?: TranscribeRecordingOptions
   ) => Promise<TranscribeResult>
+  listReminders: () => Promise<
+    Array<{
+      id: string
+      message: string
+      createdAt: number
+      fireAt: number
+      status: 'pending' | 'fired' | 'cancelled'
+      source?: 'manual' | 'fairy'
+    }>
+  >
+  cancelReminder: (id: string) => Promise<boolean>
+  clearFinishedReminders: () => Promise<number>
+  createReminder: (payload: {
+    message: string
+    delaySeconds: number
+  }) => Promise<{
+    id: string
+    message: string
+    createdAt: number
+    fireAt: number
+    status: 'pending' | 'fired' | 'cancelled'
+    source?: 'manual' | 'fairy'
+  }>
 }
 
 declare global {
