@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Electron</title>
+  <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+  <!-- index.html -->
+  <meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self' 'unsafe-eval' blob:;
+  worker-src 'self' blob:;
+  style-src 'self' 'unsafe-inline';
+  img-src 'self' data: blob:;
+  media-src 'self' blob:;
+  connect-src 'self' blob: data:;
+" />
+
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/main.ts"></script>
+  <!-- 去掉 ./public，直接从根路径引入 -->
+  <script src="/live2d/live2dcubismcore.min.js"></script>
+</body>
+
+</html>

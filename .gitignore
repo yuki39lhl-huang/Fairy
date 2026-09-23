@@ -1,0 +1,42 @@
+# dependencies / build
+**/node_modules/
+**/dist/
+**/out/
+**/.eslintcache
+*.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Python
+**/__pycache__/
+*.pyc
+
+# local secrets / env
+.env
+.env.*
+!.env.example
+*.pem
+*credentials*
+*secret*
+
+# large / local media (keep code + app public assets)
+mp3/
+common/*.mp4
+common/*.aac
+common/*.zip
+common/fairy_motion_frames/
+common/fairy_motion_crops/
+*.aac
+image.zip
+
+# Whisper model too large for GitHub (download separately)
+ZeroFairyClient/resources/models/*.bin
+
+# Electron / packaging
+ZeroFairyClient/release/
+ZeroFairyClient/dist/

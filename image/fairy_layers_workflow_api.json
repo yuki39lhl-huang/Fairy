@@ -1,0 +1,456 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "fairy_layers_source.png"
+    }
+  },
+  "10": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "fairy_layers_background_mask.png"
+    }
+  },
+  "11": {
+    "class_type": "ImageToMask",
+    "inputs": {
+      "image": [
+        "10",
+        0
+      ],
+      "channel": "red"
+    }
+  },
+  "12": {
+    "class_type": "InvertMask",
+    "inputs": {
+      "mask": [
+        "11",
+        0
+      ]
+    }
+  },
+  "13": {
+    "class_type": "JoinImageWithAlpha",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "alpha": [
+        "12",
+        0
+      ]
+    }
+  },
+  "14": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "13",
+        0
+      ],
+      "filename_prefix": "fairy_layers/background"
+    }
+  },
+  "15": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "fairy_layers_blue_glow_mask.png"
+    }
+  },
+  "16": {
+    "class_type": "ImageToMask",
+    "inputs": {
+      "image": [
+        "15",
+        0
+      ],
+      "channel": "red"
+    }
+  },
+  "17": {
+    "class_type": "InvertMask",
+    "inputs": {
+      "mask": [
+        "16",
+        0
+      ]
+    }
+  },
+  "18": {
+    "class_type": "JoinImageWithAlpha",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "alpha": [
+        "17",
+        0
+      ]
+    }
+  },
+  "19": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "18",
+        0
+      ],
+      "filename_prefix": "fairy_layers/blue_glow"
+    }
+  },
+  "20": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "fairy_layers_outer_ring_mask.png"
+    }
+  },
+  "21": {
+    "class_type": "ImageToMask",
+    "inputs": {
+      "image": [
+        "20",
+        0
+      ],
+      "channel": "red"
+    }
+  },
+  "22": {
+    "class_type": "InvertMask",
+    "inputs": {
+      "mask": [
+        "21",
+        0
+      ]
+    }
+  },
+  "23": {
+    "class_type": "JoinImageWithAlpha",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "alpha": [
+        "22",
+        0
+      ]
+    }
+  },
+  "24": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "23",
+        0
+      ],
+      "filename_prefix": "fairy_layers/outer_ring"
+    }
+  },
+  "25": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "fairy_layers_core_mask.png"
+    }
+  },
+  "26": {
+    "class_type": "ImageToMask",
+    "inputs": {
+      "image": [
+        "25",
+        0
+      ],
+      "channel": "red"
+    }
+  },
+  "27": {
+    "class_type": "InvertMask",
+    "inputs": {
+      "mask": [
+        "26",
+        0
+      ]
+    }
+  },
+  "28": {
+    "class_type": "JoinImageWithAlpha",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "alpha": [
+        "27",
+        0
+      ]
+    }
+  },
+  "29": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "28",
+        0
+      ],
+      "filename_prefix": "fairy_layers/core"
+    }
+  },
+  "30": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "fairy_layers_white_ring_mask.png"
+    }
+  },
+  "31": {
+    "class_type": "ImageToMask",
+    "inputs": {
+      "image": [
+        "30",
+        0
+      ],
+      "channel": "red"
+    }
+  },
+  "32": {
+    "class_type": "InvertMask",
+    "inputs": {
+      "mask": [
+        "31",
+        0
+      ]
+    }
+  },
+  "33": {
+    "class_type": "JoinImageWithAlpha",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "alpha": [
+        "32",
+        0
+      ]
+    }
+  },
+  "34": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "33",
+        0
+      ],
+      "filename_prefix": "fairy_layers/white_ring"
+    }
+  },
+  "35": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "fairy_layers_icon_mask.png"
+    }
+  },
+  "36": {
+    "class_type": "ImageToMask",
+    "inputs": {
+      "image": [
+        "35",
+        0
+      ],
+      "channel": "red"
+    }
+  },
+  "37": {
+    "class_type": "InvertMask",
+    "inputs": {
+      "mask": [
+        "36",
+        0
+      ]
+    }
+  },
+  "38": {
+    "class_type": "JoinImageWithAlpha",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "alpha": [
+        "37",
+        0
+      ]
+    }
+  },
+  "39": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "38",
+        0
+      ],
+      "filename_prefix": "fairy_layers/icon"
+    }
+  },
+  "40": {
+    "class_type": "EmptyImage",
+    "inputs": {
+      "width": 1254,
+      "height": 1254,
+      "batch_size": 1,
+      "color": 0
+    }
+  },
+  "41": {
+    "class_type": "ImageCompositeMasked",
+    "inputs": {
+      "destination": [
+        "40",
+        0
+      ],
+      "source": [
+        "1",
+        0
+      ],
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "mask": [
+        "11",
+        0
+      ]
+    }
+  },
+  "42": {
+    "class_type": "ImageCompositeMasked",
+    "inputs": {
+      "destination": [
+        "41",
+        0
+      ],
+      "source": [
+        "1",
+        0
+      ],
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "mask": [
+        "16",
+        0
+      ]
+    }
+  },
+  "43": {
+    "class_type": "ImageCompositeMasked",
+    "inputs": {
+      "destination": [
+        "42",
+        0
+      ],
+      "source": [
+        "1",
+        0
+      ],
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "mask": [
+        "21",
+        0
+      ]
+    }
+  },
+  "44": {
+    "class_type": "ImageCompositeMasked",
+    "inputs": {
+      "destination": [
+        "43",
+        0
+      ],
+      "source": [
+        "1",
+        0
+      ],
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "mask": [
+        "26",
+        0
+      ]
+    }
+  },
+  "45": {
+    "class_type": "ImageCompositeMasked",
+    "inputs": {
+      "destination": [
+        "44",
+        0
+      ],
+      "source": [
+        "1",
+        0
+      ],
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "mask": [
+        "31",
+        0
+      ]
+    }
+  },
+  "46": {
+    "class_type": "ImageCompositeMasked",
+    "inputs": {
+      "destination": [
+        "45",
+        0
+      ],
+      "source": [
+        "1",
+        0
+      ],
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "mask": [
+        "36",
+        0
+      ]
+    }
+  },
+  "47": {
+    "class_type": "SolidMask",
+    "inputs": {
+      "value": 0.0,
+      "width": 1254,
+      "height": 1254
+    }
+  },
+  "48": {
+    "class_type": "JoinImageWithAlpha",
+    "inputs": {
+      "image": [
+        "46",
+        0
+      ],
+      "alpha": [
+        "47",
+        0
+      ]
+    }
+  },
+  "49": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "48",
+        0
+      ],
+      "filename_prefix": "fairy_layers/composite"
+    }
+  }
+}

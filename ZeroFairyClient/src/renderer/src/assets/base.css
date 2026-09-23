@@ -1,0 +1,51 @@
+/* 全局 CSS 变量：赛博绝区零风格色系 */
+:root {
+  --fairy-blue: #38bdf8;
+  --fairy-blue-dim: rgba(56, 189, 248, 0.2);
+  --fairy-blue-border: rgba(56, 189, 248, 0.3);
+  --fairy-bg: #0a0e1a;
+  --fairy-bg-soft: rgba(15, 23, 42, 0.9);
+  --fairy-bg-card: rgba(15, 23, 42, 0.8);
+  --fairy-text: #e2e8f0;
+  --fairy-text-dim: #475569;
+  --fairy-text-mid: #94a3b8;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-weight: normal;
+}
+
+ul { list-style: none; }
+
+html, body, #app {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  background: var(--fairy-bg);
+  color: var(--fairy-text);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  line-height: 1.6;
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 全局滚动条 */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--fairy-blue-border);
+  border-radius: 2px;
+}

@@ -1,0 +1,145 @@
+diff --git a/node_modules/@naari3/pixi-live2d-display/dist/index.es.js b/node_modules/@naari3/pixi-live2d-display/dist/index.es.js
+index 7ba48b7..a5fc152 100644
+--- a/node_modules/@naari3/pixi-live2d-display/dist/index.es.js
++++ b/node_modules/@naari3/pixi-live2d-display/dist/index.es.js
+@@ -1790,7 +1790,7 @@ __publicField(_ZipLoader, "factory", (context, next) => __async(null, null, func
+     context.source = files;
+     if (sourceURL.startsWith("blob:")) {
+       context.live2dModel.once("modelLoaded", (internalModel) => {
+-        internalModel.once("destroy", function() {
++        internalModel.once("destroy", function () {
+           URL.revokeObjectURL(sourceURL);
+         });
+       });
+@@ -1889,12 +1889,12 @@ __publicField(_FileLoader, "factory", (context, next) => __async(null, null, fun
+     }
+     settings.validateFiles(files.map((file) => encodeURI(file.webkitRelativePath)));
+     yield _FileLoader.upload(files, settings);
+-    settings.resolveURL = function(url) {
++    settings.resolveURL = function (url) {
+       return _FileLoader.resolveURL(this._objectURL, url);
+     };
+     context.source = settings;
+     context.live2dModel.once("modelLoaded", (internalModel) => {
+-      internalModel.once("destroy", function() {
++      internalModel.once("destroy", function () {
+         const objectURL = this.settings._objectURL;
+         URL.revokeObjectURL(objectURL);
+         if (_FileLoader.filesMap[objectURL]) {
+@@ -2104,10 +2104,10 @@ __publicField(_Live2DFactory, "motionTasksMap", /* @__PURE__ */ new WeakMap());
+  */
+ __publicField(_Live2DFactory, "expressionTasksMap", /* @__PURE__ */ new WeakMap());
+ let Live2DFactory = _Live2DFactory;
+-MotionManager.prototype["_loadMotion"] = function(group, index) {
++MotionManager.prototype["_loadMotion"] = function (group, index) {
+   return Live2DFactory.loadMotion(this, group, index);
+ };
+-ExpressionManager.prototype["_loadExpression"] = function(index) {
++ExpressionManager.prototype["_loadExpression"] = function (index) {
+   return Live2DFactory.loadExpression(this, index);
+ };
+ FileLoader["live2dFactory"] = Live2DFactory;
+@@ -6958,7 +6958,7 @@ class CubismOverrideMotion extends ACubismMotion {
+       this._motionData.curves.at(curveCount).baseSegmentIndex = totalSegmentCount;
+       this._motionData.curves.at(curveCount).fadeInTime = curve.FadeInTime !== void 0 && curve.FadeInTime !== null ? curve.FadeInTime : -1;
+       this._motionData.curves.at(curveCount).fadeOutTime = curve.FadeOutTime !== void 0 && curve.FadeOutTime !== null ? curve.FadeOutTime : -1;
+-      for (let segmentPosition = 0; segmentPosition < curve.Segments.length; ) {
++      for (let segmentPosition = 0; segmentPosition < curve.Segments.length;) {
+         if (segmentPosition == 0) {
+           this._motionData.segments.at(totalSegmentCount).basePointIndex = totalPointCount;
+           this._motionData.points.at(totalPointCount).time = curve.Segments[segmentPosition];
+@@ -7646,7 +7646,7 @@ class CubismMotionQueueManager {
+    * @return false 終了していない
+    */
+   isFinished() {
+-    for (let ite = this._motions.begin(); ite.notEqual(this._motions.end()); ) {
++    for (let ite = this._motions.begin(); ite.notEqual(this._motions.end());) {
+       let motionQueueEntry = ite.ptr();
+       if (motionQueueEntry == null) {
+         ite = this._motions.erase(ite);
+@@ -7689,7 +7689,7 @@ class CubismMotionQueueManager {
+    * 全てのモーションを停止する
+    */
+   stopAllMotions() {
+-    for (let ite = this._motions.begin(); ite.notEqual(this._motions.end()); ) {
++    for (let ite = this._motions.begin(); ite.notEqual(this._motions.end());) {
+       let motionQueueEntry = ite.ptr();
+       if (motionQueueEntry == null) {
+         ite = this._motions.erase(ite);
+@@ -7750,7 +7750,7 @@ class CubismMotionQueueManager {
+    */
+   doUpdateMotion(model, userTimeSeconds) {
+     let updated = false;
+-    for (let ite = this._motions.begin(); ite.notEqual(this._motions.end()); ) {
++    for (let ite = this._motions.begin(); ite.notEqual(this._motions.end());) {
+       let motionQueueEntry = ite.ptr();
+       if (motionQueueEntry == null) {
+         ite = this._motions.erase(ite);
+@@ -7897,7 +7897,7 @@ class CubismMotionJson {
+     let actualTotalSegmentCount = 0;
+     let actualTotalPointCount = 0;
+     for (let curvePosition = 0; curvePosition < actualCurveListSize; ++curvePosition) {
+-      for (let segmentPosition = 0; segmentPosition < this.getMotionCurveSegmentCount(curvePosition); ) {
++      for (let segmentPosition = 0; segmentPosition < this.getMotionCurveSegmentCount(curvePosition);) {
+         if (segmentPosition == 0) {
+           actualTotalPointCount += 1;
+           segmentPosition += 2;
+@@ -8702,7 +8702,7 @@ class CubismMotion extends ACubismMotion {
+       this._motionData.curves.at(curveCount).baseSegmentIndex = totalSegmentCount;
+       this._motionData.curves.at(curveCount).fadeInTime = json.isExistMotionCurveFadeInTime(curveCount) ? json.getMotionCurveFadeInTime(curveCount) : -1;
+       this._motionData.curves.at(curveCount).fadeOutTime = json.isExistMotionCurveFadeOutTime(curveCount) ? json.getMotionCurveFadeOutTime(curveCount) : -1;
+-      for (let segmentPosition = 0; segmentPosition < json.getMotionCurveSegmentCount(curveCount); ) {
++      for (let segmentPosition = 0; segmentPosition < json.getMotionCurveSegmentCount(curveCount);) {
+         if (segmentPosition == 0) {
+           this._motionData.segments.at(totalSegmentCount).basePointIndex = totalPointCount;
+           this._motionData.points.at(totalPointCount).time = json.getMotionCurveSegment(curveCount, segmentPosition);
+@@ -9591,7 +9591,7 @@ class CubismClippingManager {
+         if (channelIndex == checkChannelIndex && reduceLayoutTextureCount > 0) {
+           layoutCount -= !(renderTextureIndex < reduceLayoutTextureCount) ? 1 : 0;
+         }
+-        if (layoutCount == 0) ;
++        if (layoutCount == 0);
+         else if (layoutCount == 1) {
+           const clipContext = this._clippingContextListForMask.at(curClipIndex++);
+           clipContext._layoutChannelIndex = channelIndex;
+@@ -11129,7 +11129,8 @@ class CubismRenderer_WebGL extends CubismRenderer {
+     const drawableCount = this.getModel().getDrawableCount();
+     const renderOrder = this.getModel().getDrawableRenderOrders();
+     for (let i = 0; i < drawableCount; ++i) {
+-      const order = renderOrder[i];
++      // const order = renderOrder[i];
++      const order = renderOrder ? renderOrder[i] : i;
+       this._sortedDrawableIndexList.set(order, i);
+     }
+     for (let i = 0; i < drawableCount; ++i) {
+@@ -11481,6 +11482,11 @@ class Cubism5InternalModel extends InternalModel {
+     (_c = this.physics) == null ? void 0 : _c.evaluate(model, dt);
+     (_d = this.pose) == null ? void 0 : _d.updateParameters(model, dt);
+     this.updateFocus();
++    if (this.lipSyncEnabled && this.motionManager.lipSyncIds && this.motionManager.lipSyncIds.length > 0) {
++      for (let i = 0; i < this.motionManager.lipSyncIds.length; i++) {
++        model.setParameterValueById(this.motionManager.lipSyncIds[i], this.lipSyncValue, 1)
++      }
++    }
+     this.emit("beforeModelUpdate");
+     model.update();
+   }
+@@ -12277,7 +12283,7 @@ class Cubism5ModelSettings extends ModelSettings {
+   static isValidJSON(json) {
+     var _a;
+     return !!(json == null ? void 0 : json.FileReferences) && typeof json.FileReferences.Moc === "string" && ((_a = json.FileReferences.Textures) == null ? void 0 : _a.length) > 0 && // textures must be an array of strings
+-    json.FileReferences.Textures.every((item) => typeof item === "string");
++      json.FileReferences.Textures.every((item) => typeof item === "string");
+   }
+   /**
+    * Get all eye blink parameter IDs as an array
+@@ -13810,6 +13816,9 @@ class CubismModel {
+    * @return Drawableの描画順リスト
+    */
+   getDrawableRenderOrders() {
++    if (typeof this._model.getRenderOrders === "function") {
++      return this._model.getRenderOrders();
++    }
+     const renderOrders = this._model.drawables.renderOrders;
+     return renderOrders;
+   }
