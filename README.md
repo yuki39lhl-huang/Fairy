@@ -34,3 +34,7 @@ npm run dev
 ## 开发进度
 
 更细的阶段记录与踩坑说明见仓库内 `ZeroFairyClient_开发进度存档.md`（开新对话时可一并参考）。
+
+## Contributors
+
+- [Yuki（yuki39lhl-huang）](https://github.com/yuki39lhl-huang) — 项目作者 / 主要开发

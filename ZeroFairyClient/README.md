@@ -111,6 +111,10 @@ python ..\live2d-fairy\build_fairy_layers_v4.py
 - `ZeroFairyClient_开发进度存档.md`：阶段进度与踩坑（开新对话衔接用）  
 - 方案以项目《方案优化.pdf》为准  
 
+## Contributors
+
+- [Yuki（yuki39lhl-huang）](https://github.com/yuki39lhl-huang) — 项目作者 / 主要开发
+
 ## License / 声明
 
 本项目为爱好向个人开发，与 miHoYo / HoYoverse 无官方关联。游戏设定与素材请遵守相关版权与使用规范。
