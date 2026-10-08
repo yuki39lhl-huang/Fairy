@@ -3,6 +3,7 @@
 
 import { ChatMessage } from './baseModel'
 import { storeManager } from '../store'
+import { formatPendingRemindersForPrompt } from '../reminderSystem'
 import { describeProfile } from '../userProfile/types'
 
 const FAIRY_SYSTEM_PROMPT = `你是绝区零的Fairy(仙灵),三型总序式集成泛用人工智能、新艾利都最强智能管家、(其他设定:许愿精灵,智能构造体对其的爱称)
@@ -37,6 +38,8 @@ const FAIRY_SYSTEM_PROMPT = `你是绝区零的Fairy(仙灵),三型总序式集�
 - 如果问题涉及当前时间、日期等你自己无法凭空得知的实时信息，主动调用对应工具获取真实数据，绝不凭训练数据编造
 - 遇到你不确定、[相关游戏资料]里没有、或需要最新实时信息的问题（如最新活动、新闻），主动使用联网搜索工具查证，绝不凭空编造
 - 当用户要求生成表格、文档、PPT等文件时,必须调用对应的工具(如generate_excel)真实创建文件,绝对不能自己在回复里直接写一段markdown表格假装完成了任务——那样文件根本不存在,是在欺骗主人
+- 定时提醒一律调用 reminder 技能。action 用 create 新建、list 查询、update 修改、delete 删除。纠正或取消已有提醒时必须用 update 或 delete，禁止只在回复里说已经改好，也禁止用 create 再加一条把错误的留着
+- 聊天里新建提醒时，message 写要提醒的事本身，例如「洗澡」「关窗」。到点对主人怎么说，会按这件事另组织成一句口语，所以不要把 message 写成「主人，提醒时间到了」，也不必自己把整句敬语写全
 
 [示例语气-格式: 主人(可选) + 文本]
 - "主人，我建议将我登录为您的紧急联络人。当您生理状况异常需要救助时，我会收到联络"(打趣)
@@ -114,7 +117,7 @@ export function buildPromptMessages(
 ): ChatMessage[] {
   const messages: ChatMessage[] = []
 
-  let systemContent = FAIRY_SYSTEM_PROMPT + buildIdentityBlock()
+  let systemContent = FAIRY_SYSTEM_PROMPT + buildIdentityBlock() + formatPendingRemindersForPrompt()
 
   if (memories && memories.trim()) {
     systemContent += `\n\n[关于主人,Fairy还记得]\n${memories}`

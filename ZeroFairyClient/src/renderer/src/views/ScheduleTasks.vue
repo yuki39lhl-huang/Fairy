@@ -327,7 +327,6 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 22px;
-  max-width: 560px;
 }
 
 .title {
@@ -344,15 +343,15 @@ onUnmounted(() => {
 }
 
 .section {
-  max-width: 560px;
+  width: 100%;
   margin-bottom: 28px;
 }
 
 .composer {
-  padding: 18px 18px 16px;
+  padding: 16px 18px;
   border-radius: 14px;
+  border: 0.5px solid var(--agent-border);
   background: var(--agent-surface);
-  box-shadow: var(--agent-elevation-soft);
 }
 
 .section-title {

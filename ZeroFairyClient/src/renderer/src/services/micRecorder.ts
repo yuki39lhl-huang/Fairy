@@ -11,23 +11,9 @@ export interface MicAudioStats {
   mimeType: string
 }
 
-export interface RecordOnceOptions {
-  seconds?: number
-  debugSave?: boolean
-  minRms?: number
-}
-
 export interface RecordingResult {
   audioData: Uint8Array
   stats: MicAudioStats
-}
-
-export interface TranscribeRecordingResult {
-  success: boolean
-  text: string
-  error?: string
-  stats?: MicAudioStats
-  debugPath?: string
 }
 
 let mediaRecorder: MediaRecorder | null = null
@@ -37,12 +23,6 @@ let recordingStartedAt = 0
 let lastMimeType = ''
 
 const TARGET_SAMPLE_RATE = 16000
-const DEFAULT_RECORD_SECONDS = 5
-const DEFAULT_MIN_RMS = 0.003
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
 
 function getSupportedMimeType(): string | undefined {
   const candidates = [
@@ -131,53 +111,6 @@ async function stopRecordingWithStats(): Promise<RecordingResult> {
       ...converted.stats,
       durationSec: Number(Math.max(converted.stats.durationSec, measuredDurationSec).toFixed(3))
     }
-  }
-}
-
-export async function recordOnce(options: RecordOnceOptions = {}): Promise<TranscribeRecordingResult> {
-  const seconds = Math.max(1, options.seconds ?? DEFAULT_RECORD_SECONDS)
-  const minRms = options.minRms ?? DEFAULT_MIN_RMS
-
-  try {
-    await startRecording()
-    console.log(`[testMic] 开始录音 ${seconds} 秒，请现在说话...`)
-    await delay(seconds * 1000)
-
-    const { audioData, stats } = await stopRecordingWithStats()
-    console.log('[testMic] 录音统计:', stats)
-
-    if (stats.rms < minRms) {
-      let debugPath: string | undefined
-      if (options.debugSave) {
-        const saveResult = await window.api.transcribeRecording(audioData, {
-          debugSave: true,
-          stats
-        })
-        debugPath = saveResult.debugPath
-      }
-
-      return {
-        success: false,
-        text: '',
-        error: `麦克风音量太低,RMS=${stats.rms}，请确认输入设备、系统权限和麦克风音量`,
-        stats,
-        debugPath
-      }
-    }
-
-    const result = await window.api.transcribeRecording(audioData, {
-      debugSave: options.debugSave,
-      stats
-    })
-
-    console.log('[testMic] Whisper 识别结果:', result)
-    return result
-  } catch (error) {
-    stopMediaTracks()
-    mediaRecorder = null
-    const message = error instanceof Error ? error.message : String(error)
-    console.error('[testMic] 录音测试失败:', message)
-    return { success: false, text: '', error: message }
   }
 }
 
@@ -270,8 +203,6 @@ function encodeWav16Mono(pcmData: Float32Array, sampleRate: number): Uint8Array 
 
   return new Uint8Array(buffer)
 }
-
-; (window as any).testMic = { startRecording, stopRecording, recordOnce, startRecordingWithVad, abortVadRecording }
 
 export interface VadOptions {
   /** RMS 高于此视为有声音，默认 0.02 */

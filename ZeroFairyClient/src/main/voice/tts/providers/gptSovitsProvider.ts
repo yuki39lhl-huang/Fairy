@@ -25,7 +25,7 @@ export const gptSovitsProvider: TtsProvider = {
       ref_audio_path: assets.localRefAudioPath,
       prompt_lang: assets.lang,
       prompt_text: assets.promptText,
-      text_split_method: 'cut5',
+      text_split_method: 'cut0',
       media_type: 'wav',
       streaming_mode: false,
       seed,

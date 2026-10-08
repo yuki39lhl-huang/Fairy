@@ -9,6 +9,15 @@ import {
   normalizeUserProfile,
   type UserProfile
 } from '../userProfile/types'
+import type { BgmPlayMode, BgmSettings } from '../bgmSystem'
+
+export const DEFAULT_BGM_SETTINGS: BgmSettings = {
+  enabled: false,
+  playMode: 'loop-all',
+  bgmVolume: 0.35,
+  fairyVoiceVolume: 1,
+  lastTrackId: null
+}
 
 interface StoreSchema {
   apiKeys: {
@@ -35,6 +44,9 @@ interface StoreSchema {
   desktopPetPinned: boolean
   desktopPetBounds: { x: number; y: number; width: number; height: number } | null
   userProfile: UserProfile
+  bgmSettings: BgmSettings
+  /** Code 模式当前项目目录，空字符串表示还没选 */
+  codeProjectDir: string
 }
 
 const encryptionKey = createHash('sha256')
@@ -56,7 +68,9 @@ const store = new ElectronStore({
     desktopPetEnabled: true,
     desktopPetPinned: false,
     desktopPetBounds: null,
-    userProfile: DEFAULT_USER_PROFILE
+    userProfile: DEFAULT_USER_PROFILE,
+    bgmSettings: DEFAULT_BGM_SETTINGS,
+    codeProjectDir: ''
   }
 }) as unknown as import('electron-store').default<StoreSchema>
 
@@ -143,5 +157,45 @@ export const storeManager = {
     const next = normalizeUserProfile({ ...storeManager.getUserProfile(), ...profile })
     store.set('userProfile', next)
     return next
+  },
+
+  getBgmSettings(): BgmSettings {
+    const raw = store.get('bgmSettings') ?? DEFAULT_BGM_SETTINGS
+    const playMode: BgmPlayMode =
+      raw.playMode === 'loop-one' || raw.playMode === 'loop-all' || raw.playMode === 'shuffle'
+        ? raw.playMode
+        : 'loop-all'
+    return {
+      enabled: Boolean(raw.enabled),
+      playMode,
+      bgmVolume: clamp01(raw.bgmVolume ?? DEFAULT_BGM_SETTINGS.bgmVolume),
+      fairyVoiceVolume: clamp01(raw.fairyVoiceVolume ?? DEFAULT_BGM_SETTINGS.fairyVoiceVolume),
+      lastTrackId: typeof raw.lastTrackId === 'string' ? raw.lastTrackId : null
+    }
+  },
+  setBgmSettings(partial: Partial<BgmSettings>): BgmSettings {
+    const next = { ...storeManager.getBgmSettings(), ...partial }
+    next.bgmVolume = clamp01(next.bgmVolume)
+    next.fairyVoiceVolume = clamp01(next.fairyVoiceVolume)
+    if (next.playMode !== 'loop-one' && next.playMode !== 'loop-all' && next.playMode !== 'shuffle') {
+      next.playMode = 'loop-all'
+    }
+    store.set('bgmSettings', next)
+    return next
+  },
+
+  getCodeProjectDir(): string {
+    const dir = store.get('codeProjectDir')
+    return typeof dir === 'string' ? dir : ''
+  },
+  setCodeProjectDir(dir: string): string {
+    const next = dir.trim()
+    store.set('codeProjectDir', next)
+    return next
   }
+}
+
+function clamp01(n: number): number {
+  if (!Number.isFinite(n)) return 0
+  return Math.min(1, Math.max(0, n))
 }

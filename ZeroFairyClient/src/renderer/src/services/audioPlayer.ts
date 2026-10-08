@@ -7,9 +7,15 @@ let currentObjectUrl: string | null = null
 let analyser: AnalyserNode | null = null
 let freqData: Uint8Array | null = null
 let mouthSyncRafId: number | null = null
+let fairyVoiceVolume = 1
 
 // 不管这段代码实际跑在哪个窗口，只管往外广播，谁关心谁自己订阅
 const mouthSyncChannel = new BroadcastChannel('fairy-mouth-sync')
+
+export function setFairyVoiceVolume(v: number): void {
+  fairyVoiceVolume = Math.min(1, Math.max(0, v))
+  if (currentSound) currentSound.volume(fairyVoiceVolume)
+}
 
 function ensureAnalyser(): AnalyserNode {
   if (!analyser) {
@@ -80,7 +86,10 @@ export function playReplyAudio(audioData: Uint8Array, onEnd?: () => void): void 
   currentSound = new Howl({
     src: [currentObjectUrl],
     format: ['wav'],
-    onplay: () => startMouthSync(),
+    volume: fairyVoiceVolume,
+    onplay: () => {
+      startMouthSync()
+    },
     onend: () => {
       stopMouthSync()
       onEnd?.()

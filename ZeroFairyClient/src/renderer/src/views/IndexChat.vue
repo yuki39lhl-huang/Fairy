@@ -1,12 +1,15 @@
 <!-- Main chat: clean agent conversation surface (no decorative background). -->
 <script setup lang="ts">
-import { ref, nextTick, computed, watch } from 'vue'
+import { ref, nextTick, computed, watch, inject, type Ref } from 'vue'
 import { useChatStore } from '../stores/chatStore'
 import { useLlmStore } from '../stores/llmStore'
 import { startRecording, stopRecording } from '../services/micRecorder'
+import fairyMark from '../assets/fairy-mark.png'
+import FairyEyeCanvas from '../components/FairyEyeCanvas/FairyEyeCanvas.vue'
 
 const chatStore = useChatStore()
 const llmStore = useLlmStore()
+const workMode = inject<Ref<'chat' | 'code'>>('workMode', ref('chat'))
 
 const inputText = ref('')
 const messagesEl = ref<HTMLElement>()
@@ -52,6 +55,7 @@ async function sendMessage(): Promise<void> {
   if (!text || llmStore.isGenerating) return
 
   inputText.value = ''
+  chatStore.armStream()
   chatStore.addMessage('user', text)
   llmStore.setGenerating(true)
   await scrollToBottom()
@@ -62,7 +66,7 @@ async function sendMessage(): Promise<void> {
   }))
 
   try {
-    await window.api.sendMessage(text, history)
+    await window.api.sendMessage(text, history, chatStore.sessionId)
   } catch (error) {
     console.error('[Chat] 发送失败:', error)
     llmStore.setGenerating(false)
@@ -107,31 +111,103 @@ function handleKeydown(e: KeyboardEvent): void {
   }
 }
 
-/** 轻量 Markdown：加粗 / 列表感 / 换行，避免裸 ** 与挤成一团 */
-function formatMessageHtml(raw: string): string {
-  const escaped = raw
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-  return escaped
+function escapeHtml(raw: string): string {
+  return raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function inlineMarkdown(raw: string): string {
+  return raw
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/^[-*] (.+)$/gm, '<span class="md-li">$1</span>')
-    .replace(/\n{2,}/g, '<br /><br />')
-    .replace(/\n/g, '<br />')
+}
+
+function isBlockStart(line: string): boolean {
+  return (
+    /^#{1,3}\s+\S/.test(line) ||
+    /^\d+\.\s+\S/.test(line) ||
+    /^[-*]\s+\S/.test(line) ||
+    /^\*\*[^*]+\*\*$/.test(line)
+  )
+}
+
+/** 标题、加粗、有序/无序列表和段落，接近 Claude 的正文节奏 */
+function formatMessageHtml(raw: string): string {
+  const lines = escapeHtml(raw).replace(/\r\n/g, '\n').split('\n')
+  const blocks: string[] = []
+  let index = 0
+
+  while (index < lines.length) {
+    const line = lines[index]
+    if (!line.trim()) {
+      index += 1
+      continue
+    }
+
+    const heading = line.match(/^(#{1,3})\s+(.+)$/)
+    if (heading) {
+      blocks.push(`<p class="md-h">${inlineMarkdown(heading[2])}</p>`)
+      index += 1
+      continue
+    }
+
+    const solo = line.match(/^\*\*(.+)\*\*$/)
+    if (solo) {
+      blocks.push(`<p class="md-h">${inlineMarkdown(solo[1])}</p>`)
+      index += 1
+      continue
+    }
+
+    if (/^\d+\.\s+/.test(line)) {
+      const items: string[] = []
+      while (index < lines.length && /^\d+\.\s+/.test(lines[index])) {
+        items.push(`<li>${inlineMarkdown(lines[index].replace(/^\d+\.\s+/, ''))}</li>`)
+        index += 1
+      }
+      blocks.push(`<ol class="md-ol">${items.join('')}</ol>`)
+      continue
+    }
+
+    if (/^[-*]\s+/.test(line)) {
+      const items: string[] = []
+      while (index < lines.length && /^[-*]\s+/.test(lines[index])) {
+        items.push(`<li>${inlineMarkdown(lines[index].replace(/^[-*]\s+/, ''))}</li>`)
+        index += 1
+      }
+      blocks.push(`<ul class="md-ul">${items.join('')}</ul>`)
+      continue
+    }
+
+    const paragraph: string[] = []
+    while (index < lines.length && lines[index].trim() && !isBlockStart(lines[index])) {
+      paragraph.push(lines[index])
+      index += 1
+    }
+    blocks.push(`<p>${inlineMarkdown(paragraph.join('<br />'))}</p>`)
+  }
+
+  return blocks.join('')
 }
 
 </script>
 
 <template>
-  <div class="chat">
-    <header class="top">
-      <div class="top-hint">新艾利都智能管家</div>
-    </header>
-
+  <div class="chat" :class="{ idle: isEmpty && workMode === 'chat' }">
     <div ref="messagesEl" class="thread">
-      <div v-if="isEmpty" class="hero">
-        <h1 class="hero-title">今天想聊点什么？</h1>
-        <p class="hero-sub">直接提问，或用下方输入框开始新对话。</p>
+      <div v-if="workMode === 'code'" class="hero">
+        <div class="hero-row">
+          <img class="hero-mark" :src="fairyMark" alt="" />
+          <h1 class="hero-title">Code</h1>
+        </div>
+        <p class="hero-sub">这个模式先占位，还不能写代码。切回 Chat 就能继续和 Fairy 说话。</p>
+      </div>
+
+      <div v-else-if="isEmpty" class="hero">
+        <div class="hero-row">
+          <div class="hero-eye" aria-hidden="true">
+            <FairyEyeCanvas hide-background :eye-fit="0.92" />
+          </div>
+          <h1 class="hero-title">今天想聊点什么？</h1>
+        </div>
       </div>
 
       <div v-else class="thread-inner">
@@ -140,17 +216,9 @@ function formatMessageHtml(raw: string): string {
           :key="index"
           :class="['row', msg.role === 'user' ? 'row-user' : 'row-assistant']"
         >
-          <div v-if="msg.role === 'assistant'" class="role">Fairy</div>
           <div :class="['bubble', msg.role === 'user' ? 'bubble-user' : 'bubble-assistant']">
-            <p
-              v-if="msg.role === 'user'"
-              class="bubble-text"
-            >{{ msg.content }}</p>
-            <div
-              v-else
-              class="bubble-text md"
-              v-html="formatMessageHtml(msg.content)"
-            />
+            <p v-if="msg.role === 'user'" class="bubble-text">{{ msg.content }}</p>
+            <div v-else class="bubble-text md" v-html="formatMessageHtml(msg.content)" />
             <span
               v-if="msg.role === 'assistant' && llmStore.isGenerating && index === displayMessages.length - 1"
               class="cursor"
@@ -159,17 +227,14 @@ function formatMessageHtml(raw: string): string {
           </div>
         </div>
 
-        <div
-          v-if="llmStore.isGenerating && !chatStore.streamingContent"
-          class="status-row"
-        >
+        <div v-if="llmStore.isGenerating && !chatStore.streamingContent" class="status-row">
           <span class="status-dot" />
           <span class="status-text">{{ llmStore.statusText || 'Fairy 思考中…' }}</span>
         </div>
       </div>
     </div>
 
-    <div class="composer-wrap">
+    <div v-if="workMode !== 'code'" class="composer-wrap">
       <div class="composer">
         <textarea
           v-model="inputText"
@@ -207,7 +272,7 @@ function formatMessageHtml(raw: string): string {
         </div>
       </div>
       <p v-if="micError" class="error">{{ micError }}</p>
-      <p v-else class="footnote">Enter 发送 · Shift+Enter 换行</p>
+      <p v-else-if="!isEmpty" class="footnote">Fairy虽为新艾利都最强ai管家,可能也会犯错,请仔细核对回复内容</p>
     </div>
   </div>
 </template>
@@ -220,33 +285,52 @@ function formatMessageHtml(raw: string): string {
   background: var(--agent-bg);
 }
 
-.top {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 14px 28px 8px;
-  min-height: 40px;
-}
-
-.top-hint {
-  font-size: 12px;
-  color: var(--agent-text-dim);
+.chat.idle {
+  justify-content: center;
+  padding-bottom: 8vh;
 }
 
 .thread {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 8px 24px 12px;
+  padding: 28px 24px 16px;
+}
+
+.chat.idle .thread {
+  flex: 0 0 auto;
+  overflow: visible;
+  padding: 0 24px;
 }
 
 .hero {
-  min-height: 58%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 10px;
   text-align: center;
+}
+
+.hero-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.hero-mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.hero-eye {
+  width: 128px;
+  height: 128px;
+  flex-shrink: 0;
 }
 
 .hero-title {
@@ -262,12 +346,12 @@ function formatMessageHtml(raw: string): string {
 }
 
 .thread-inner {
-  width: min(920px, 100%);
+  width: min(736px, 100%);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 12px 0 24px;
+  gap: 28px;
+  padding: 8px 0 28px;
 }
 
 .row {
@@ -317,56 +401,89 @@ function formatMessageHtml(raw: string): string {
   }
 }
 
-.role {
-  font-size: 12px;
-  color: var(--agent-text-dim);
-  padding-left: 2px;
-}
-
 .bubble {
-  max-width: min(820px, 100%);
+  max-width: 100%;
   user-select: text;
 }
 
 .bubble-user {
-  padding: 10px 14px;
+  max-width: min(520px, 86%);
+  padding: 10px 16px;
   border-radius: 18px;
-  background: var(--agent-user-bubble);
+  background: #303033;
 }
 
 .bubble-assistant {
-  padding: 2px 0;
+  width: 100%;
+  padding: 0;
 }
 
 .bubble-text {
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 15px;
-  line-height: 1.65;
-  color: var(--agent-text);
+  font-size: 16px;
+  line-height: 1.7;
+  color: #ececee;
 }
 
 .bubble-text.md {
   white-space: normal;
 }
 
+.bubble-text.md :deep(p) {
+  margin: 0 0 0.85em;
+}
+
+.bubble-text.md :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.bubble-text.md :deep(.md-h) {
+  margin: 1.25em 0 0.45em;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.45;
+  color: #f4f4f5;
+}
+
+.bubble-text.md :deep(.md-h:first-child) {
+  margin-top: 0;
+}
+
 .bubble-text.md :deep(strong) {
   font-weight: 650;
-  color: var(--agent-text);
+  color: #f7f7f8;
 }
 
-.bubble-text.md :deep(.md-li) {
-  display: block;
-  padding-left: 0.9em;
-  position: relative;
-  margin: 0.2em 0;
+.bubble-text.md :deep(.md-ol),
+.bubble-text.md :deep(.md-ul) {
+  margin: 0.2em 0 0.95em;
+  padding-left: 1.45em;
 }
 
-.bubble-text.md :deep(.md-li)::before {
-  content: '•';
-  position: absolute;
-  left: 0;
-  color: var(--agent-text-dim);
+.bubble-text.md :deep(.md-ol) {
+  list-style: decimal;
+}
+
+.bubble-text.md :deep(.md-ul) {
+  list-style: disc;
+}
+
+.bubble-text.md :deep(li) {
+  margin: 0.4em 0;
+  padding-left: 0.2em;
+}
+
+.bubble-text.md :deep(li)::marker {
+  color: #b8bcc2;
+}
+
+.bubble-text.md :deep(code) {
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: 0.92em;
+  padding: 0.08em 0.35em;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .cursor {
@@ -377,12 +494,19 @@ function formatMessageHtml(raw: string): string {
 }
 
 .composer-wrap {
-  padding: 8px 24px 18px;
+  width: min(736px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 0 0 14px;
+  flex-shrink: 0;
+}
+
+.chat.idle .composer-wrap {
+  margin-top: 22px;
+  padding-bottom: 0;
 }
 
 .composer {
-  width: min(920px, 100%);
-  margin: 0 auto;
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -472,10 +596,11 @@ function formatMessageHtml(raw: string): string {
 
 .footnote,
 .error {
-  width: min(920px, 100%);
-  margin: 8px auto 0;
+  width: 100%;
+  margin: 10px auto 0;
   text-align: center;
   font-size: 12px;
+  line-height: 1.45;
 }
 
 .footnote {

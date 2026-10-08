@@ -1,21 +1,56 @@
 <!-- App shell: brand, new session, collapsible rail, bottom-pinned settings. -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useChatStore } from '../../stores/chatStore'
+import { useChatStore, sessionInLane } from '../../stores/chatStore'
 import { useLlmStore } from '../../stores/llmStore'
-import fairyMark from '../../assets/fairy-mark.png'
+import { useBgmStore } from '../../stores/bgmStore'
+import { onBgmSpectrum } from '../../services/bgmPlayer'
+import Config from '../../views/Config.vue'
+import ModeSwitch from './ModeSwitch.vue'
 
 const route = useRoute()
 const router = useRouter()
 const chatStore = useChatStore()
 const llmStore = useLlmStore()
+const bgmStore = useBgmStore()
 const collapsed = ref(false)
-const confirmOpen = ref(false)
+const peeking = ref(false)
+let peekTimer: ReturnType<typeof setTimeout> | null = null
+const accountOpen = ref(false)
+const settingsOpen = ref(false)
+const accountRoot = ref<HTMLElement | null>(null)
+const workMode = ref<'chat' | 'code'>('chat')
+provide('workMode', workMode)
+
+interface SessionRow {
+  session: string
+  title: string
+  updatedAt: number
+  pinned?: boolean
+}
+
+const sessions = ref<SessionRow[]>([])
+const historyOpen = ref(true)
+const pinsOpen = ref(true)
+const projectOpen = ref(false)
+const projectDir = ref('')
+const historyMenu = ref<{ session: string; x: number; y: number } | null>(null)
+const renamingSession = ref('')
+const renameDraft = ref('')
+const historyListEl = ref<HTMLElement | null>(null)
+const historyFit = ref(8)
+const HISTORY_ROW = 32
+let historyObserver: ResizeObserver | null = null
 
 const displayName = ref('主人')
 const avatarDataUrl = ref('')
+const spectrumCanvas = ref<HTMLCanvasElement | null>(null)
 let unsubProfile: (() => void) | null = null
+let unsubSpectrum: (() => void) | null = null
+/** 扫描头位置 0–1 */
+let pulseScan = 0
+let lastPulseAt = 0
 
 const avatarLetter = computed(() => {
   const name = displayName.value.trim() || '主'
@@ -30,74 +65,423 @@ function applyProfile(p: {
   avatarDataUrl.value = p.avatarDataUrl || ''
 }
 
+function drawSpectrum(bins: number[]): void {
+  const canvas = spectrumCanvas.value
+  if (!canvas) return
+  const dpr = window.devicePixelRatio || 1
+  const cssW = canvas.clientWidth || 1
+  const cssH = canvas.clientHeight || 36
+  if (canvas.width !== Math.floor(cssW * dpr) || canvas.height !== Math.floor(cssH * dpr)) {
+    canvas.width = Math.floor(cssW * dpr)
+    canvas.height = Math.floor(cssH * dpr)
+  }
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.clearRect(0, 0, cssW, cssH)
+  ctx.shadowBlur = 0
+
+  const midY = cssH / 2
+  const pad = 6
+  const left = pad
+  const width = Math.max(1, cssW - pad * 2)
+  const n = Math.max(4, Math.min(14, Math.floor(width / 18)))
+  const slot = width / n
+
+  ctx.strokeStyle = 'rgba(122, 170, 255, 0.28)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(left, midY)
+  ctx.lineTo(left + width, midY)
+  ctx.stroke()
+
+  ctx.fillStyle = 'rgba(122, 170, 255, 0.45)'
+  const ticks = Math.max(4, Math.floor(width / 22))
+  for (let i = 0; i <= ticks; i++) {
+    const x = left + (width * i) / ticks
+    const major = i % 4 === 0
+    ctx.fillRect(x, midY + 4, 1, major ? 4 : 2)
+  }
+
+  const levels: number[] = []
+  for (let i = 0; i < n; i++) {
+    const start = Math.floor((i / n) * bins.length)
+    const end = Math.max(start + 1, Math.min(bins.length, Math.floor(((i + 1) / n) * bins.length)))
+    let sum = 0
+    for (let j = start; j < end; j++) sum += bins[j] ?? 0
+    levels.push(sum / (end - start))
+  }
+  const frameMax = levels.reduce((m, v) => Math.max(m, v), 0)
+  const maxRise = cssH * 0.48
+  const now = performance.now()
+  const dt = lastPulseAt ? Math.min(0.05, (now - lastPulseAt) / 1000) : 1 / 60
+  lastPulseAt = now
+
+  for (let i = 0; i < n; i++) {
+    const v = levels[i] ?? 0
+    // 相对本帧最强频段拉开：弱的贴着基线，强的才拉高
+    const shaped = frameMax < 0.08 ? 0 : Math.pow(Math.min(1, v / frameMax), 1.65)
+    const rise = shaped * maxRise
+    if (rise < 1.5) continue
+    const x = left + (i + 0.5) * slot
+    ctx.save()
+    ctx.shadowColor = `rgba(170, 205, 255, ${0.35 + shaped * 0.65})`
+    ctx.shadowBlur = 4 + shaped * 8
+    ctx.strokeStyle = `rgba(${Math.round(150 + shaped * 90)}, ${Math.round(190 + shaped * 50)}, 255, ${0.35 + shaped * 0.65})`
+    ctx.lineWidth = shaped > 0.72 ? 1.6 : 1.1
+    ctx.lineJoin = 'miter'
+    ctx.beginPath()
+    ctx.moveTo(x, midY)
+    ctx.lineTo(x, midY - rise)
+    ctx.lineTo(x + 2.2, midY + Math.min(4, rise * 0.22))
+    ctx.lineTo(x + slot * 0.42, midY)
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  // 约 6 秒走完一圈（原先约 1 秒）
+  pulseScan = (pulseScan + dt * 0.16) % 1
+  const hx = left + pulseScan * width
+  const head = ctx.createLinearGradient(hx - 22, midY, hx, midY)
+  head.addColorStop(0, 'rgba(122, 170, 255, 0)')
+  head.addColorStop(1, 'rgba(232, 242, 255, 0.95)')
+  ctx.strokeStyle = head
+  ctx.lineWidth = 1.5
+  ctx.beginPath()
+  ctx.moveTo(Math.max(left, hx - 22), midY)
+  ctx.lineTo(hx, midY)
+  ctx.stroke()
+
+  ctx.save()
+  ctx.shadowColor = 'rgba(190, 216, 255, 0.95)'
+  ctx.shadowBlur = 8
+  ctx.fillStyle = '#f4f8ff'
+  ctx.beginPath()
+  ctx.arc(hx, midY, 1.7, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+}
+
+const pinnedSessions = computed(() => sessions.value.filter((row) => row.pinned))
+const unpinnedSessions = computed(() => sessions.value.filter((row) => !row.pinned))
+const historyOverflow = computed(() => unpinnedSessions.value.length > historyFit.value)
+const visibleSessions = computed(() =>
+  historyOverflow.value ? unpinnedSessions.value.slice(0, historyFit.value) : unpinnedSessions.value
+)
+const projectName = computed(() => {
+  const parts = projectDir.value.split(/[/\\]/).filter(Boolean)
+  return parts[parts.length - 1] || projectDir.value
+})
+const newSessionLabel = computed(() => (workMode.value === 'code' ? '新会话' : '新对话'))
+const historyLabel = computed(() => (workMode.value === 'code' ? '会话' : '对话'))
+
+function measureHistory(): void {
+  const el = historyListEl.value
+  if (!el) return
+  historyFit.value = Math.max(1, Math.floor(el.clientHeight / HISTORY_ROW))
+}
+
+watch([historyOpen, collapsed, peeking], async () => {
+  await nextTick()
+  historyObserver?.disconnect()
+  if (historyListEl.value && historyObserver) historyObserver.observe(historyListEl.value)
+  measureHistory()
+})
+
+async function refreshSessions(): Promise<void> {
+  if (!window.api?.listChatSessions) {
+    sessions.value = []
+    return
+  }
+  try {
+    sessions.value = (await window.api.listChatSessions(workMode.value)).filter((row) =>
+      sessionInLane(row.session, workMode.value)
+    )
+  } catch {
+    sessions.value = []
+  }
+  await nextTick()
+  measureHistory()
+}
+
 onMounted(async () => {
   try {
     applyProfile(await window.api.getUserProfile())
   } catch {
     /* ignore */
   }
-  unsubProfile = window.api.onUserProfileChanged(applyProfile)
+  unsubProfile = window.api?.onUserProfileChanged?.(applyProfile) ?? null
+  document.addEventListener('pointerdown', onDocumentPointer)
+  void bgmStore.bootstrap()
+  unsubSpectrum = onBgmSpectrum((bins) => drawSpectrum(bins))
+  drawSpectrum(new Array(32).fill(0))
+  void refreshSessions()
+  try {
+    projectDir.value = (await window.api.getCodeProjectDir()) || ''
+    projectOpen.value = Boolean(projectDir.value)
+  } catch {
+    projectDir.value = ''
+  }
+  window.addEventListener('fairy-sessions-changed', onSessionsChanged)
+  window.api?.onAgUiEvent?.((event) => {
+    if (event.type === 'ai:done') void refreshSessions()
+  })
+  historyObserver = new ResizeObserver(() => measureHistory())
+  await nextTick()
+  if (historyListEl.value) historyObserver.observe(historyListEl.value)
 })
+
+function onSessionsChanged(): void {
+  void refreshSessions()
+}
 
 onUnmounted(() => {
   unsubProfile?.()
+  unsubSpectrum?.()
+  historyObserver?.disconnect()
+  clearPeekTimer()
+  document.removeEventListener('pointerdown', onDocumentPointer)
+  window.removeEventListener('fairy-sessions-changed', onSessionsChanged)
 })
 
-const navItems = [
-  { to: '/chat', label: '聊天' },
-  { to: '/memory', label: '记忆' },
-  { to: '/toolplugin', label: '工具' },
-  { to: '/schedule', label: '定时任务' }
-] as const
-
 const activePath = computed(() => route.path)
-const settingsActive = computed(
-  () => activePath.value === '/config' || activePath.value.startsWith('/config/')
-)
-const profileActive = computed(
-  () => activePath.value === '/profile' || activePath.value.startsWith('/profile/')
-)
 
-const hasChatContent = computed(
-  () => chatStore.messages.length > 0 || !!chatStore.streamingContent || llmStore.isGenerating
-)
+const showSpectrum = computed(() => bgmStore.enabled && bgmStore.playing)
 
 function isActive(to: string): boolean {
   return activePath.value === to || activePath.value.startsWith(to + '/')
 }
 
-function requestNewChat(): void {
-  if (hasChatContent.value) {
-    confirmOpen.value = true
+function doNewChat(): void {
+  chatStore.activate(workMode.value)
+  chatStore.startNewSession()
+  llmStore.setGenerating(false)
+  void refreshSessions()
+  if (route.path !== '/chat') void router.push('/chat')
+}
+
+async function openSession(row: SessionRow): Promise<void> {
+  if (llmStore.isGenerating) return
+  chatStore.activate(workMode.value)
+  try {
+    const rows = (await window.api?.getChatMessages(row.session)) ?? []
+    chatStore.loadSession(
+      row.session,
+      rows.map((item) => ({ role: item.role, content: item.content }))
+    )
+  } catch {
     return
   }
-  doNewChat()
+  if (route.path !== '/chat') await router.push('/chat')
 }
 
-function doNewChat(): void {
-  confirmOpen.value = false
-  chatStore.clearMessages()
-  llmStore.setGenerating(false)
-  if (route.path !== '/chat') router.push('/chat')
+watch(workMode, (mode) => {
+  chatStore.activate(mode)
+  void refreshSessions()
+  if (mode === 'code' && route.path === '/schedule') void router.push('/chat')
+})
+
+async function onProjectHead(): Promise<void> {
+  if (!projectDir.value) {
+    await pickProjectDir()
+    return
+  }
+  projectOpen.value = !projectOpen.value
 }
 
-function cancelNewChat(): void {
-  confirmOpen.value = false
+async function pickProjectDir(): Promise<void> {
+  const picked = await window.api.pickCodeProjectDir?.()
+  if (!picked) return
+  projectDir.value = picked
+  projectOpen.value = true
+}
+
+function openHistoryPage(): void {
+  void router.push('/history')
+}
+
+function dismissPeek(): void {
+  peeking.value = false
+  clearPeekTimer()
 }
 
 function openVoiceCall(): void {
+  dismissPeek()
+  accountOpen.value = false
   window.api.openVoiceCallWindow()
+}
+
+function clearPeekTimer(): void {
+  if (peekTimer) {
+    clearTimeout(peekTimer)
+    peekTimer = null
+  }
+}
+
+const PEEK_WIDTH = 248
+
+function schedulePeekClose(): void {
+  if (peekTimer) return
+  peekTimer = setTimeout(() => {
+    peeking.value = false
+    peekTimer = null
+  }, 120)
+}
+
+function onShellPointerMove(event: PointerEvent): void {
+  if (!collapsed.value || settingsOpen.value) {
+    if (peeking.value) dismissPeek()
+    return
+  }
+  if (accountOpen.value) {
+    clearPeekTimer()
+    peeking.value = true
+    return
+  }
+  const shell = event.currentTarget
+  if (!(shell instanceof HTMLElement)) return
+  const shellRect = shell.getBoundingClientRect()
+  const x = event.clientX - shellRect.left
+  const btn = shell.querySelector('.sidebar-top [aria-label="展开侧栏"]')?.getBoundingClientRect()
+  const onExpand =
+    !!btn &&
+    event.clientX >= btn.left &&
+    event.clientX <= btn.right &&
+    event.clientY >= btn.top &&
+    event.clientY <= btn.bottom
+  const inPanel = peeking.value && x >= 0 && x <= PEEK_WIDTH
+  if (onExpand || inPanel) {
+    clearPeekTimer()
+    peeking.value = true
+    return
+  }
+  if (peeking.value) schedulePeekClose()
+}
+
+function onMainPointerEnter(event: PointerEvent): void {
+  if (!peeking.value || !collapsed.value || accountOpen.value) return
+  const shell = event.currentTarget instanceof HTMLElement ? event.currentTarget.parentElement : null
+  if (!shell) return
+  const x = event.clientX - shell.getBoundingClientRect().left
+  if (x <= PEEK_WIDTH) return
+  schedulePeekClose()
 }
 
 function toggleSidebar(): void {
   collapsed.value = !collapsed.value
+  peeking.value = false
+  clearPeekTimer()
+  accountOpen.value = false
+}
+
+function toggleAccount(): void {
+  clearPeekTimer()
+  accountOpen.value = !accountOpen.value
+}
+
+function openSettings(): void {
+  dismissPeek()
+  accountOpen.value = false
+  settingsOpen.value = true
+}
+
+function closeSettings(): void {
+  settingsOpen.value = false
+}
+
+function onDocumentPointer(event: PointerEvent): void {
+  if (historyMenu.value && event.target instanceof Node) {
+    const menu = document.querySelector('.history-menu')
+    if (!menu || !menu.contains(event.target)) historyMenu.value = null
+  }
+  const root = accountRoot.value
+  if (!accountOpen.value || !root) return
+  if (event.target instanceof Node && root.contains(event.target)) return
+  accountOpen.value = false
+  if (!collapsed.value || !peeking.value) return
+  const shell = root.closest('.shell')
+  if (!(shell instanceof HTMLElement)) return
+  const x = event.clientX - shell.getBoundingClientRect().left
+  if (x > PEEK_WIDTH) dismissPeek()
+}
+
+function openHistoryMenu(event: MouseEvent, row: SessionRow): void {
+  const menuWidth = 168
+  const menuHeight = 120
+  const x = Math.min(event.clientX, window.innerWidth - menuWidth - 8)
+  const y = Math.min(event.clientY, window.innerHeight - menuHeight - 8)
+  historyMenu.value = { session: row.session, x, y }
+}
+
+const historyMenuRow = computed(() =>
+  sessions.value.find((row) => row.session === historyMenu.value?.session) ?? null
+)
+
+async function togglePinSession(row: SessionRow): Promise<void> {
+  historyMenu.value = null
+  await window.api?.setChatPinned?.(row.session, !row.pinned)
+  await refreshSessions()
+}
+
+function beginRename(row: SessionRow): void {
+  historyMenu.value = null
+  renamingSession.value = row.session
+  renameDraft.value = row.title
+  void nextTick(() => {
+    document.querySelector<HTMLInputElement>('.history-rename')?.focus()
+  })
+}
+
+async function commitRename(): Promise<void> {
+  const session = renamingSession.value
+  const title = renameDraft.value.trim()
+  renamingSession.value = ''
+  if (!session || !title) return
+  await window.api?.renameChatSession?.(session, title)
+  await refreshSessions()
+}
+
+async function deleteSession(row: SessionRow): Promise<void> {
+  historyMenu.value = null
+  await window.api?.deleteChatSession?.(row.session)
+  if (chatStore.sessionId === row.session) {
+    chatStore.startNewSession()
+    if (route.path !== '/chat') await router.push('/chat')
+  }
+  await refreshSessions()
+}
+
+function minimizeWindow(): void {
+  void window.api?.minimizeWindow()
+}
+
+function toggleMaximizeWindow(): void {
+  void window.api?.toggleMaximizeWindow()
+}
+
+function closeWindow(): void {
+  void window.api?.closeWindow()
 }
 </script>
 
 <template>
-  <div class="shell" :class="{ collapsed }">
-    <aside class="sidebar">
-      <div class="sidebar-top">
+  <div
+    class="shell"
+    :class="{ collapsed, peeking: collapsed && peeking }"
+    @pointermove="onShellPointerMove"
+  >
+    <div class="sidebar-top">
+        <button type="button" class="collapse-btn" title="拓展" aria-label="拓展">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M4 7h16M4 12h16M4 17h16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
         <button
           type="button"
           class="collapse-btn"
@@ -106,18 +490,29 @@ function toggleSidebar(): void {
           @click="toggleSidebar"
         >
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              v-if="collapsed"
-              d="M9 6l6 6-6 6"
+            <rect
+              x="4"
+              y="5"
+              width="16"
+              height="14"
+              rx="2"
               fill="none"
               stroke="currentColor"
               stroke-width="1.6"
-              stroke-linecap="round"
-              stroke-linejoin="round"
             />
+            <path d="M9 5v14" fill="none" stroke="currentColor" stroke-width="1.6" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="collapse-btn"
+          title="语音通话"
+          aria-label="语音通话"
+          @click="openVoiceCall"
+        >
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
             <path
-              v-else
-              d="M15 6l-6 6 6 6"
+              d="M8 5h3l1.5 3.5-2 1.2a12 12 0 0 0 5.8 5.8l1.2-2L20 15v3a2 2 0 0 1-2.2 2A16 16 0 0 1 4 8.2 2 2 0 0 1 6 6"
               fill="none"
               stroke="currentColor"
               stroke-width="1.6"
@@ -126,119 +521,237 @@ function toggleSidebar(): void {
             />
           </svg>
         </button>
-
-        <div v-if="!collapsed" class="brand" @click="requestNewChat">
-          <img class="brand-mark" :src="fairyMark" alt="" aria-hidden="true" />
-          <div class="brand-text">
-            <span class="brand-name">Fairy</span>
-            <span class="brand-badge">Agent</span>
-          </div>
-        </div>
-        <button
-          v-else
-          type="button"
-          class="brand-mark alone"
-          title="Fairy"
-          @click="requestNewChat"
-        >
-          <img class="brand-mark-img" :src="fairyMark" alt="Fairy" />
-        </button>
+        <div v-show="!collapsed" class="sidebar-drag" />
+        <ModeSwitch v-if="!collapsed" v-model="workMode" />
       </div>
 
-      <button
-        class="nav-primary"
-        type="button"
-        :title="collapsed ? '新对话' : undefined"
-        @click="requestNewChat"
-      >
-        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
-          <path
-            d="M12 5v14M5 12h14"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.6"
-            stroke-linecap="round"
-          />
-        </svg>
-        <span v-if="!collapsed" class="nav-primary-label">新对话</span>
-      </button>
-
+    <aside v-if="!collapsed || peeking" class="sidebar">
+      <div v-if="collapsed && peeking" class="peek-top">
+        <ModeSwitch v-model="workMode" />
+      </div>
       <nav class="nav-list">
+        <button type="button" class="nav-item" @click="doNewChat">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M8 6.5h6.2A2 2 0 0 1 16.2 8.5v5.2a2 2 0 0 1-2 2H9.2L6.4 18.2V8.5A2 2 0 0 1 8.4 6.5"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linejoin="round"
+            />
+            <path
+              d="M18.2 4.8v5.2M15.6 7.4h5.2"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+            />
+          </svg>
+          {{ newSessionLabel }}
+        </button>
         <button
-          v-for="item in navItems"
-          :key="item.to"
+          v-if="workMode !== 'code'"
           type="button"
           class="nav-item"
-          :class="{ active: isActive(item.to) }"
-          :title="collapsed ? item.label : undefined"
-          @click="router.push(item.to)"
+          :class="{ active: isActive('/schedule') }"
+          @click="router.push('/schedule')"
         >
-          <span v-if="!collapsed">{{ item.label }}</span>
-          <span v-else class="nav-dot">{{ item.label.slice(0, 1) }}</span>
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.6" />
+            <path
+              d="M12 8.2V12l2.8 1.8"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          定时任务
         </button>
+        <div v-else class="project-block">
+          <button type="button" class="history-head" @click="onProjectHead">
+            <span>项目</span>
+            <span class="history-chevron" :class="{ open: projectOpen && projectDir }" aria-hidden="true">
+              <svg viewBox="0 0 12 12"><path d="M4.2 2.4 7.8 6 4.2 9.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </span>
+          </button>
+          <button
+            v-if="projectOpen && projectDir"
+            type="button"
+            class="history-item"
+            :title="projectDir"
+            @click="pickProjectDir"
+          >
+            {{ projectName }}
+          </button>
+        </div>
+
+        <div class="history-block">
+          <template v-if="pinnedSessions.length">
+            <button type="button" class="history-head" @click="pinsOpen = !pinsOpen">
+              <span>已置顶</span>
+              <span class="history-chevron" :class="{ open: pinsOpen }" aria-hidden="true">
+                <svg viewBox="0 0 12 12"><path d="M4.2 2.4 7.8 6 4.2 9.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              </span>
+            </button>
+            <div v-if="pinsOpen" class="history-pin-list">
+              <template v-for="row in pinnedSessions" :key="row.session">
+                <input
+                  v-if="renamingSession === row.session"
+                  v-model="renameDraft"
+                  class="history-rename"
+                  @click.stop
+                  @keydown.enter.prevent="commitRename"
+                  @keydown.esc.prevent="renamingSession = ''"
+                  @blur="commitRename"
+                />
+                <button
+                  v-else
+                  type="button"
+                  class="history-item"
+                  :class="{ active: chatStore.sessionId === row.session && activePath === '/chat' }"
+                  :title="row.title"
+                  @click="openSession(row)"
+                  @contextmenu.prevent="openHistoryMenu($event, row)"
+                >
+                  {{ row.title }}
+                </button>
+              </template>
+            </div>
+          </template>
+
+          <button type="button" class="history-head" @click="historyOpen = !historyOpen">
+            <span>{{ historyLabel }}</span>
+            <span class="history-chevron" :class="{ open: historyOpen }" aria-hidden="true">
+              <svg viewBox="0 0 12 12"><path d="M4.2 2.4 7.8 6 4.2 9.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </span>
+          </button>
+          <div v-if="historyOpen" ref="historyListEl" class="history-list">
+            <p v-if="unpinnedSessions.length === 0 && pinnedSessions.length === 0" class="history-empty">还没有{{ historyLabel }}</p>
+            <template v-for="row in visibleSessions" :key="row.session">
+              <input
+                v-if="renamingSession === row.session"
+                v-model="renameDraft"
+                class="history-rename"
+                @click.stop
+                @keydown.enter.prevent="commitRename"
+                @keydown.esc.prevent="renamingSession = ''"
+                @blur="commitRename"
+              />
+              <button
+                v-else
+                type="button"
+                class="history-item"
+                :class="{ active: chatStore.sessionId === row.session && activePath === '/chat' }"
+                :title="row.title"
+                @click="openSession(row)"
+                @contextmenu.prevent="openHistoryMenu($event, row)"
+              >
+                {{ row.title }}
+              </button>
+            </template>
+          </div>
+          <button
+            v-if="historyOpen && historyOverflow"
+            type="button"
+            class="history-more"
+            :class="{ active: isActive('/history') }"
+            @click="openHistoryPage"
+          >
+            展示更多
+          </button>
+        </div>
       </nav>
 
       <div class="sidebar-foot">
-        <button
-          type="button"
-          class="nav-item call"
-          :title="collapsed ? '语音通话' : undefined"
-          @click="openVoiceCall"
-        >
-          <span v-if="!collapsed">语音通话</span>
-          <span v-else class="nav-dot">通</span>
-        </button>
-        <button
-          type="button"
-          class="nav-item settings"
-          :class="{ active: settingsActive }"
-          :title="collapsed ? '设置' : undefined"
-          @click="router.push('/config')"
-        >
-          <span v-if="!collapsed">设置</span>
-          <span v-else class="nav-dot">设</span>
-        </button>
-        <button
-          type="button"
-          class="user-chip"
-          :class="{ alone: collapsed, active: profileActive }"
-          :title="collapsed ? displayName : undefined"
-          @click="router.push('/profile')"
-        >
-          <span class="user-avatar">
-            <img
-              v-if="avatarDataUrl"
-              class="user-avatar-img"
-              :src="avatarDataUrl"
-              alt=""
-            />
-            <template v-else>{{ avatarLetter }}</template>
-          </span>
-          <span v-if="!collapsed" class="user-name">{{ displayName }}</span>
-        </button>
+        <div class="spectrum-wrap" :class="{ active: showSpectrum }" aria-hidden="true">
+          <canvas ref="spectrumCanvas" class="spectrum" />
+        </div>
+        <div ref="accountRoot" class="account">
+          <button
+            type="button"
+            class="user-chip"
+            :class="{ active: accountOpen }"
+            :aria-expanded="accountOpen"
+            @click="toggleAccount"
+          >
+            <span class="user-avatar">
+              <img
+                v-if="avatarDataUrl"
+                class="user-avatar-img"
+                :src="avatarDataUrl"
+                alt=""
+              />
+              <template v-else>{{ avatarLetter }}</template>
+            </span>
+            <span class="user-name">{{ displayName }}</span>
+          </button>
+          <div v-if="accountOpen" class="account-menu" role="menu">
+            <div class="account-name">{{ displayName }}</div>
+            <button type="button" class="account-item" role="menuitem" @click="openSettings">
+              设置
+            </button>
+          </div>
+        </div>
       </div>
     </aside>
 
-    <main class="main">
-      <RouterView />
-    </main>
-
-    <div v-if="confirmOpen" class="confirm-mask" @click.self="cancelNewChat">
-      <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="new-chat-title">
-        <h2 id="new-chat-title" class="confirm-title">开始新对话？</h2>
-        <p class="confirm-desc">当前聊天内容会被清空，且无法恢复。</p>
-        <div class="confirm-actions">
-          <button type="button" class="btn-ghost" @click="cancelNewChat">取消</button>
-          <button type="button" class="btn-danger" @click="doNewChat">清空并新建</button>
+    <div class="winbar">
+        <div class="win-drag" />
+        <span v-if="activePath === '/chat'" class="win-hint">新艾利都智能管家</span>
+        <div class="win-controls">
+          <button type="button" class="win-btn" aria-label="最小化" @click="minimizeWindow">
+            <svg viewBox="0 0 12 12" aria-hidden="true">
+              <path d="M2 6h8" fill="none" stroke="currentColor" stroke-width="1.2" />
+            </svg>
+          </button>
+          <button type="button" class="win-btn" aria-label="最大化" @click="toggleMaximizeWindow">
+            <svg viewBox="0 0 12 12" aria-hidden="true">
+              <rect x="2.2" y="2.2" width="7.6" height="7.6" fill="none" stroke="currentColor" stroke-width="1.2" />
+            </svg>
+          </button>
+          <button type="button" class="win-btn close" aria-label="关闭" @click="closeWindow">
+            <svg viewBox="0 0 12 12" aria-hidden="true">
+              <path d="M3 3l6 6M9 3L3 9" fill="none" stroke="currentColor" stroke-width="1.2" />
+            </svg>
+          </button>
         </div>
       </div>
+      <div class="main-body" @pointerenter="onMainPointerEnter">
+        <RouterView />
+      </div>
+
+    <div v-if="settingsOpen" class="settings-mask" @click.self="closeSettings">
+      <div class="settings-float" role="dialog" aria-modal="true" aria-label="设置">
+        <button type="button" class="settings-close" aria-label="关闭设置" @click="closeSettings">
+          ×
+        </button>
+        <Config />
+      </div>
     </div>
+
+    <div
+      v-if="historyMenu && historyMenuRow"
+      class="history-menu"
+      :style="{ left: historyMenu.x + 'px', top: historyMenu.y + 'px' }"
+      @pointerdown.stop
+    >
+      <button type="button" @click="togglePinSession(historyMenuRow)">
+        {{ historyMenuRow.pinned ? '取消置顶' : '置顶' }}
+      </button>
+      <button type="button" @click="beginRename(historyMenuRow)">重命名</button>
+      <button type="button" class="danger" @click="deleteSession(historyMenuRow)">删除</button>
+    </div>
+
   </div>
 </template>
 
 <style scoped>
 .shell {
-  display: flex;
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-rows: 40px minmax(0, 1fr);
   width: 100%;
   height: 100%;
   background: var(--agent-bg);
@@ -246,49 +759,105 @@ function toggleSidebar(): void {
   position: relative;
 }
 
+.shell.collapsed {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
 .sidebar {
-  width: 248px;
-  flex-shrink: 0;
+  grid-area: 2 / 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 10px 14px;
-  background: var(--agent-sidebar);
+  padding: 0 10px 14px;
+  gap: 0;
+  background: #111111;
   border-right: 0.5px solid var(--agent-border-strong);
-  transition: width 0.18s ease;
   overflow: hidden;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 
-.shell.collapsed .sidebar {
-  width: 56px;
-  padding-left: 8px;
-  padding-right: 8px;
-  align-items: center;
+.shell:has(.account-menu) .sidebar {
+  overflow: visible;
 }
 
-.sidebar-top,
-.brand,
 .collapse-btn,
-.nav-primary,
 .nav-item,
+.history-head,
+.history-item,
+.history-more,
 .sidebar-foot,
-.brand-mark.alone,
+.account,
 .user-chip {
   -webkit-app-region: no-drag;
 }
 
 .sidebar-top {
+  grid-area: 1 / 1;
+  position: relative;
+  z-index: 6;
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 40px;
+  height: 40px;
+  min-width: 0;
+  padding: 0 10px;
+  box-sizing: border-box;
+  background: #111111;
+  border-right: 0.5px solid var(--agent-border-strong);
+  -webkit-app-region: drag;
 }
 
 .shell.collapsed .sidebar-top {
-  flex-direction: column;
-  gap: 8px;
-  width: 100%;
+  width: max-content;
+  background: var(--agent-bg);
+  border-right-color: transparent;
+  padding-right: 4px;
+  z-index: 26;
+  -webkit-app-region: no-drag;
+}
+
+.shell.peeking .sidebar-top,
+.shell.peeking .sidebar {
+  background: #20201e;
+  border-right-color: transparent;
+}
+
+.peek-top {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  height: 40px;
+  margin: 0 -10px;
+  padding: 0 10px 0 132px;
+  box-sizing: border-box;
+  background: #20201e;
+  -webkit-app-region: no-drag;
+}
+
+.shell.peeking .sidebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  grid-area: auto;
+  z-index: 25;
+  width: 248px;
+  height: 100%;
+  box-shadow: 12px 0 32px rgba(0, 0, 0, 0.28);
+  -webkit-app-region: no-drag;
+}
+
+.sidebar-drag {
+  flex: 1;
+  align-self: stretch;
+  min-width: 12px;
+  -webkit-app-region: drag;
+}
+
+.shell.peeking .win-drag {
+  -webkit-app-region: no-drag;
 }
 
 .collapse-btn {
@@ -299,7 +868,7 @@ function toggleSidebar(): void {
   border-radius: 8px;
   display: grid;
   place-items: center;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.001);
   color: var(--agent-text-mid);
   cursor: pointer;
 }
@@ -309,65 +878,57 @@ function toggleSidebar(): void {
   color: var(--agent-text);
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 4px 4px 2px;
-  cursor: pointer;
-  min-width: 0;
-  flex: 1;
-}
-
-.brand-mark {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: transparent;
-  color: var(--agent-text);
-  box-shadow: none;
-  border: none;
-  outline: none;
-  cursor: pointer;
-  font: inherit;
-  flex-shrink: 0;
-  object-fit: contain;
-  padding: 0;
-  overflow: visible;
-}
-
-.brand-mark.alone {
-  margin: 0;
-}
-
-.brand-mark-img {
+.account {
+  position: relative;
   width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-  border-radius: 50%;
 }
 
-.brand-text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
+.account.alone {
+  width: auto;
 }
 
-.brand-name {
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  line-height: 1.2;
+.account-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 30;
+  width: 100%;
+  min-width: 180px;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--agent-surface);
+  box-shadow: var(--agent-elevation-panel);
+  -webkit-app-region: no-drag;
 }
 
-.brand-badge {
-  font-size: 11px;
+.account.alone .account-menu {
+  left: calc(100% + 8px);
+  bottom: 0;
+  width: 180px;
+}
+
+.account-name {
+  padding: 8px 10px 6px;
+  font-size: 12px;
   color: var(--agent-text-dim);
-  line-height: 1.2;
+}
+
+.account-item {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.001);
+  color: var(--agent-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.account-item:hover {
+  background: var(--agent-sidebar-hover);
 }
 
 .nav-primary {
@@ -387,14 +948,6 @@ function toggleSidebar(): void {
   text-align: left;
 }
 
-.shell.collapsed .nav-primary {
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  justify-content: center;
-  border-radius: 10px;
-}
-
 .nav-primary:hover {
   background: var(--agent-sidebar-hover);
 }
@@ -409,35 +962,27 @@ function toggleSidebar(): void {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  margin-top: 8px;
+  margin-top: 0;
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+  overflow: hidden;
   width: 100%;
 }
 
-.shell.collapsed .nav-list {
-  align-items: center;
-}
-
 .nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   width: 100%;
   padding: 8px 12px;
   border: none;
   border-radius: 10px;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.001);
   color: var(--agent-text-mid);
   font: inherit;
   font-size: 13px;
   text-align: left;
   cursor: pointer;
-}
-
-.shell.collapsed .nav-item {
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  display: grid;
-  place-items: center;
 }
 
 .nav-item:hover {
@@ -450,7 +995,148 @@ function toggleSidebar(): void {
   color: var(--agent-text);
 }
 
-.nav-item.call {
+.history-block {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+}
+
+.history-head,
+.history-more {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.001);
+  color: var(--agent-text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.history-head:hover,
+.history-more:hover,
+.history-item:hover {
+  background: var(--agent-sidebar-hover);
+  color: var(--agent-text);
+}
+
+.history-chevron {
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  color: var(--agent-text-dim);
+  transition: transform 0.15s ease;
+}
+
+.history-chevron svg {
+  width: 12px;
+  height: 12px;
+}
+
+.history-chevron.open {
+  transform: rotate(90deg);
+}
+
+.history-pin-list {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.history-rename {
+  width: 100%;
+  height: 32px;
+  margin: 0;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--agent-sidebar-active);
+  color: var(--agent-text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  -webkit-app-region: no-drag;
+}
+
+.history-menu {
+  position: fixed;
+  z-index: 80;
+  width: 160px;
+  padding: 6px;
+  border-radius: 12px;
+  background: #2a2a2e;
+  box-shadow: var(--agent-elevation-panel);
+  -webkit-app-region: no-drag;
+}
+
+.history-menu button {
+  display: block;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--agent-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.history-menu button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.history-menu button.danger {
+  color: #f07178;
+}
+
+.history-list {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.history-empty {
+  margin: 0;
+  height: 32px;
+  padding: 8px 12px;
+  color: var(--agent-text-dim);
+  font-size: 12px;
+}
+
+.history-item {
+  display: block;
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.001);
+  color: var(--agent-text-mid);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-item.active,
+.history-more.active {
+  background: var(--agent-sidebar-active);
   color: var(--agent-text);
 }
 
@@ -461,16 +1147,30 @@ function toggleSidebar(): void {
 
 .sidebar-foot {
   margin-top: auto;
-  padding-top: 10px;
-  border-top: 0.5px solid var(--agent-border);
+  padding-top: 6px;
+  border-top: none;
   display: flex;
   flex-direction: column;
   gap: 1px;
   width: 100%;
 }
 
-.shell.collapsed .sidebar-foot {
-  align-items: center;
+.spectrum-wrap {
+  width: 100%;
+  height: 58px;
+  margin-bottom: 6px;
+  opacity: 0.55;
+  transition: opacity 0.2s ease;
+}
+
+.spectrum-wrap.active {
+  opacity: 1;
+}
+
+.spectrum {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .user-chip {
@@ -482,7 +1182,7 @@ function toggleSidebar(): void {
   padding: 8px;
   border: none;
   border-radius: 10px;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.001);
   color: inherit;
   font: inherit;
   text-align: left;
@@ -533,81 +1233,125 @@ function toggleSidebar(): void {
   white-space: nowrap;
 }
 
-.main {
-  flex: 1;
+.winbar {
+  grid-area: 1 / 2;
+  height: 40px;
   min-width: 0;
-  height: 100%;
-  overflow: hidden;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
   background: var(--agent-bg);
 }
 
-.confirm-mask {
-  position: absolute;
-  inset: 0;
-  z-index: 40;
-  display: grid;
-  place-items: center;
-  background: rgba(0, 0, 0, 0.48);
+.win-drag {
+  flex: 1;
+  -webkit-app-region: drag;
+}
+
+.win-hint {
+  align-self: center;
+  margin-right: 12px;
+  font-size: 12px;
+  color: var(--agent-text-dim);
   -webkit-app-region: no-drag;
 }
 
-.confirm-card {
-  width: min(360px, calc(100% - 40px));
-  padding: 22px 22px 18px;
-  border-radius: 14px;
-  background: var(--agent-surface);
-  box-shadow: var(--agent-elevation-panel);
-}
-
-.confirm-title {
-  margin: 0 0 8px;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.confirm-desc {
-  margin: 0 0 20px;
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--agent-text-dim);
-}
-
-.confirm-actions {
+.win-controls {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  -webkit-app-region: no-drag;
 }
 
-.btn-ghost,
-.btn-danger {
-  appearance: none;
-  height: 34px;
-  padding: 0 14px;
-  border-radius: 8px;
+.shell:has(.settings-mask) .win-controls {
+  position: relative;
+  z-index: 50;
+  background: transparent;
+}
+
+.win-btn {
+  width: 46px;
+  height: 40px;
   border: none;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
+  background: transparent;
+  color: var(--agent-text-mid);
+  display: grid;
+  place-items: center;
   cursor: pointer;
 }
 
-.btn-ghost {
-  background: transparent;
-  color: var(--agent-text-mid);
-  border: 0.5px solid var(--agent-border-strong);
+.win-btn svg {
+  width: 12px;
+  height: 12px;
 }
 
-.btn-ghost:hover {
+.win-btn:hover {
   background: var(--agent-sidebar-hover);
   color: var(--agent-text);
 }
 
-.btn-danger {
-  background: var(--agent-send);
-  color: var(--agent-send-fg);
+.win-btn.close:hover {
+  background: #e5484d;
+  color: #fff;
 }
 
-.btn-danger:hover {
-  filter: brightness(0.94);
+.main-body {
+  grid-area: 2 / 2;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--agent-bg);
+}
+
+.main-body > :deep(*) {
+  flex: 1;
+  min-height: 0;
+}
+
+.shell.collapsed .main-body {
+  grid-column: 1 / -1;
+}
+
+.settings-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  padding: calc(40px + clamp(14px, 2.4vh, 28px)) clamp(18px, 8vw, 176px) clamp(14px, 2.4vh, 28px);
+  background: rgba(0, 0, 0, 0.52);
+  -webkit-app-region: no-drag;
+}
+
+.settings-float {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--agent-bg);
+  border: 0.5px solid var(--agent-border-strong);
+  box-shadow: var(--agent-elevation-panel);
+}
+
+.settings-close {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: var(--agent-bg);
+  color: var(--agent-text-mid);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.settings-close:hover {
+  background: var(--agent-sidebar-hover);
+  color: var(--agent-text);
 }
 </style>

@@ -6,13 +6,13 @@ export interface SpeakScriptContext {
   scene?: 'chat' | 'reminder' | 'idle' | 'generic'
 }
 
+/** 这些词保持英文原文，不改中文谐音，也不拆成字母 */
+const KEEP_AS_WRITTEN = new Set(['ai', 'fairy', 'random', 'play', 'randomplay'])
+
 /** 英文 / 缩写读法表（可继续扩充；查不到再走通用拉丁规则） */
 const LEXICON: Record<string, string> = {
   ok: '欧克',
   OK: '欧克',
-  fairy: '菲莉',
-  Fairy: '菲莉',
-  FAIRY: '菲莉',
   hp: '体力',
   HP: '体力',
   mp: '法力',
@@ -28,8 +28,6 @@ const LEXICON: Record<string, string> = {
   http: '链接',
   https: '链接',
   www: '',
-  ai: 'A I',
-  AI: 'A I',
   tts: '语音合成',
   TTS: '语音合成',
   npc: 'N P C',
@@ -65,10 +63,11 @@ function numberToZh(n: number): string {
 
 function applyLexicon(text: string): string {
   return text.replace(/\b[A-Za-z][A-Za-z0-9+._-]{0,31}\b/g, (word) => {
+    const lower = word.toLowerCase()
+    if (KEEP_AS_WRITTEN.has(lower)) return word
     if (Object.prototype.hasOwnProperty.call(LEXICON, word)) {
       return LEXICON[word]
     }
-    const lower = word.toLowerCase()
     if (Object.prototype.hasOwnProperty.call(LEXICON, lower)) {
       return LEXICON[lower]
     }
@@ -132,6 +131,7 @@ export function toSpeakText(raw: string, _ctx: SpeakScriptContext = {}): string 
   let result = (raw || '').replace(/\r\n/g, '\n').trim()
   if (!result) return ''
 
+  result = result.replace(/\[emotion:[a-zA-Z]+\]/g, '')
   result = normalizeSymbols(result)
   result = applyLexicon(result)
   result = normalizeNumbersAndTime(result)

@@ -38,41 +38,6 @@ export const memoryDb = {
     `).all(limit) as MemoryRecord[]
   },
 
-  // 按类型查询
-  getByType(type: string): MemoryRecord[] {
-    const db = getDb()
-    return db.prepare(`
-      SELECT * FROM memory
-      WHERE type = ?
-      ORDER BY importance DESC
-    `).all(type) as MemoryRecord[]
-  },
-
-  // 更新记忆（发现已有相似内容时更新而不是重复插入）
-  update(id: number, content: string, importance: number): void {
-    const db = getDb()
-    db.prepare(`
-      UPDATE memory
-      SET content = ?, importance = ?, updated_at = strftime('%s', 'now')
-      WHERE id = ?
-    `).run(content, importance, id)
-  },
-
-  // 获取所有记忆（记忆查看页面用）
-  getAll(): MemoryRecord[] {
-    const db = getDb()
-    return db.prepare(`
-      SELECT * FROM memory
-      ORDER BY importance DESC, updated_at DESC
-    `).all() as MemoryRecord[]
-  },
-
-  // 删除一条记忆
-  delete(id: number): void {
-    const db = getDb()
-    db.prepare('DELETE FROM memory WHERE id = ?').run(id)
-  },
-
   /** 按内容前缀清理（用于个人设定覆盖旧身份记忆） */
   deleteByContentPrefixes(prefixes: string[]): number {
     const db = getDb()
@@ -85,7 +50,6 @@ export const memoryDb = {
     return removed
   },
 
-  // memoryBase.ts 加一个方法
   existsContent(content: string): boolean {
     const db = getDb()
     const row = db.prepare('SELECT id FROM memory WHERE content = ?').get(content)

@@ -25,7 +25,22 @@ interface TranscribeResult {
 }
 
 interface Api {
-  sendMessage: (text: string, history: { role: string; content: string }[]) => Promise<string>
+  sendMessage: (
+    text: string,
+    history: { role: string; content: string }[],
+    sessionId?: string
+  ) => Promise<string>
+  listChatSessions: (
+    lane?: 'chat' | 'code'
+  ) => Promise<Array<{ session: string; title: string; updatedAt: number; pinned: boolean }>>
+  setChatPinned: (sessionId: string, pinned: boolean) => Promise<boolean>
+  renameChatSession: (sessionId: string, title: string) => Promise<boolean>
+  deleteChatSession: (sessionId: string) => Promise<boolean>
+  getChatMessages: (
+    sessionId: string
+  ) => Promise<Array<{ role: 'user' | 'assistant'; content: string }>>
+  getCodeProjectDir: () => Promise<string>
+  pickCodeProjectDir: () => Promise<string | null>
   onAgUiEvent: (callback: (event: { type: string; payload: unknown }) => void) => void
   saveApiKey: (provider: string, key: string) => Promise<void>
   getApiKey: (provider: string) => Promise<string>
@@ -68,6 +83,9 @@ interface Api {
   notifyFairyFloatSpeechEnded: () => Promise<void>
   transcribeSpeech: (audioPath: string) => Promise<TranscribeResult>
   openVoiceCallWindow: () => Promise<void>
+  minimizeWindow: () => Promise<void>
+  toggleMaximizeWindow: () => Promise<boolean>
+  closeWindow: () => Promise<void>
   transcribeRecording: (
     audioData: Uint8Array,
     options?: TranscribeRecordingOptions
@@ -130,6 +148,40 @@ interface Api {
       assistant2CustomName: string
     }) => void
   ) => () => void
+  listBgmTracks: () => Promise<{
+    dir: string
+    tracks: Array<{
+      id: string
+      fileName: string
+      title: string
+      artist: string
+    }>
+  }>
+  readBgmTrack: (
+    fileName: string
+  ) => Promise<{ data: Uint8Array; mime: string; fileName: string }>
+  getBgmSettings: () => Promise<{
+    enabled: boolean
+    playMode: 'loop-one' | 'loop-all' | 'shuffle'
+    bgmVolume: number
+    fairyVoiceVolume: number
+    lastTrackId: string | null
+  }>
+  setBgmSettings: (
+    partial: Partial<{
+      enabled: boolean
+      playMode: 'loop-one' | 'loop-all' | 'shuffle'
+      bgmVolume: number
+      fairyVoiceVolume: number
+      lastTrackId: string | null
+    }>
+  ) => Promise<{
+    enabled: boolean
+    playMode: 'loop-one' | 'loop-all' | 'shuffle'
+    bgmVolume: number
+    fairyVoiceVolume: number
+    lastTrackId: string | null
+  }>
   getFairyPetState: () => Promise<{
     enabled: boolean
     visible: boolean

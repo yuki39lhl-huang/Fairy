@@ -3,8 +3,33 @@ import { electronAPI } from '@electron-toolkit/preload'
 
 // Custom APIs for renderer
 const api = {
-  sendMessage: (text: string, history: { role: string, content: string }[]): Promise<string> =>
-    ipcRenderer.invoke('send-message', text, history),
+  sendMessage: (
+    text: string,
+    history: { role: string; content: string }[],
+    sessionId?: string
+  ): Promise<string> => ipcRenderer.invoke('send-message', text, history, sessionId),
+
+  listChatSessions: (
+    lane: 'chat' | 'code' = 'chat'
+  ): Promise<Array<{ session: string; title: string; updatedAt: number; pinned: boolean }>> =>
+    ipcRenderer.invoke('chat:list-sessions', lane),
+
+  setChatPinned: (sessionId: string, pinned: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('chat:set-pinned', sessionId, pinned),
+
+  renameChatSession: (sessionId: string, title: string): Promise<boolean> =>
+    ipcRenderer.invoke('chat:rename-session', sessionId, title),
+
+  deleteChatSession: (sessionId: string): Promise<boolean> =>
+    ipcRenderer.invoke('chat:delete-session', sessionId),
+
+  getChatMessages: (
+    sessionId: string
+  ): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> =>
+    ipcRenderer.invoke('chat:get-messages', sessionId),
+
+  getCodeProjectDir: (): Promise<string> => ipcRenderer.invoke('code:get-project-dir'),
+  pickCodeProjectDir: (): Promise<string | null> => ipcRenderer.invoke('code:pick-project-dir'),
 
   // 订阅 AG-UI 事件流（渲染进程用这个监听主进程推送的所有事件）
   onAgUiEvent: (callback: (event: { type: string; payload: unknown }) => void): void => {
@@ -54,6 +79,9 @@ const api = {
   }> => ipcRenderer.invoke('tts:ensure-fairy-voice', providerId, force),
 
   openVoiceCallWindow: (): Promise<void> => ipcRenderer.invoke('open-voice-call-window'),
+  minimizeWindow: (): Promise<void> => ipcRenderer.invoke('window-minimize'),
+  toggleMaximizeWindow: (): Promise<boolean> => ipcRenderer.invoke('window-toggle-maximize'),
+  closeWindow: (): Promise<void> => ipcRenderer.invoke('window-close'),
   minimizeVoiceCallWindow: (): Promise<void> => ipcRenderer.invoke('minimize-voice-call-window'),
   toggleMaximizeVoiceCallWindow: (): Promise<boolean> =>
     ipcRenderer.invoke('toggle-maximize-voice-call-window'),
@@ -200,6 +228,42 @@ const api = {
       ipcRenderer.removeListener('user-profile:changed', listener)
     }
   },
+
+  listBgmTracks: (): Promise<{
+    dir: string
+    tracks: Array<{
+      id: string
+      fileName: string
+      title: string
+      artist: string
+    }>
+  }> => ipcRenderer.invoke('bgm:list-tracks'),
+  readBgmTrack: (
+    fileName: string
+  ): Promise<{ data: Uint8Array; mime: string; fileName: string }> =>
+    ipcRenderer.invoke('bgm:read-track', fileName),
+  getBgmSettings: (): Promise<{
+    enabled: boolean
+    playMode: 'loop-one' | 'loop-all' | 'shuffle'
+    bgmVolume: number
+    fairyVoiceVolume: number
+    lastTrackId: string | null
+  }> => ipcRenderer.invoke('bgm:get-settings'),
+  setBgmSettings: (
+    partial: Partial<{
+      enabled: boolean
+      playMode: 'loop-one' | 'loop-all' | 'shuffle'
+      bgmVolume: number
+      fairyVoiceVolume: number
+      lastTrackId: string | null
+    }>
+  ): Promise<{
+    enabled: boolean
+    playMode: 'loop-one' | 'loop-all' | 'shuffle'
+    bgmVolume: number
+    fairyVoiceVolume: number
+    lastTrackId: string | null
+  }> => ipcRenderer.invoke('bgm:set-settings', partial),
 
   getFairyPetState: (): Promise<{
     enabled: boolean

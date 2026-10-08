@@ -57,5 +57,14 @@ function initTables(): void {
     )
   `)
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_session_meta (
+      session   TEXT PRIMARY KEY,
+      title     TEXT,
+      pinned    INTEGER NOT NULL DEFAULT 0,
+      pinned_at INTEGER
+    )
+  `)
+
     console.log('[DB] 所有表初始化完成')
 }

@@ -12,6 +12,13 @@ export interface ChatRecord {
     created_at?: number
 }
 
+export interface ChatSessionSummary {
+    session: string
+    title: string
+    updatedAt: number
+    pinned: boolean
+}
+
 export const chatHistoryDb = {
     //保存一条信息
     save(record: ChatRecord): void {
@@ -22,17 +29,6 @@ export const chatHistoryDb = {
   `).run(record.session, record.role, record.content)
     },
 
-    //查询某个 session 的历史记录
-    getBySession(session: string, limit = 50): ChatRecord[] {
-        const db = getDb()
-        return db.prepare(`
-            SELECT * FROM chat_history
-            WHERE session = ?
-            ORDER BY created_at DESC
-            LIMIT ?
-            `).all(session, limit) as ChatRecord[]
-    },
-
     // 查询最近的 N 条记录
     getRecent(limit = 20): ChatRecord[] {
         const db = getDb()
@@ -41,5 +37,83 @@ export const chatHistoryDb = {
             ORDER BY created_at DESC
             LIMIT ?
             `).all(limit) as ChatRecord[]
+    },
+
+    /** 按会话聚合：自定义标题优先，否则取第一条用户消息。置顶排在前面。 */
+    listSessions(limit = 200, lane: 'chat' | 'code' = 'chat'): ChatSessionSummary[] {
+        const db = getDb()
+        const rows = db.prepare(`
+            SELECT
+              s.session AS session,
+              COALESCE(
+                NULLIF(m.title, ''),
+                (SELECT content FROM chat_history
+                 WHERE session = s.session AND role = 'user'
+                 ORDER BY id ASC LIMIT 1),
+                CASE WHEN s.session LIKE 'c-%' THEN '新会话' ELSE '新对话' END
+              ) AS title,
+              s.updated_at AS updatedAt,
+              COALESCE(m.pinned, 0) AS pinned,
+              m.pinned_at AS pinnedAt
+            FROM (
+              SELECT session, MAX(created_at) AS updated_at
+              FROM chat_history
+              GROUP BY session
+            ) s
+            LEFT JOIN chat_session_meta m ON m.session = s.session
+            WHERE CASE
+              WHEN ? = 'code' THEN s.session LIKE 'c-%'
+              ELSE s.session NOT LIKE 'c-%'
+            END
+            ORDER BY COALESCE(m.pinned, 0) DESC,
+                     CASE WHEN COALESCE(m.pinned, 0) = 1 THEN m.pinned_at END DESC,
+                     s.updated_at DESC
+            LIMIT ?
+        `).all(lane, limit) as Array<ChatSessionSummary & { pinned: number; pinnedAt: number | null }>
+        return rows.map((row) => ({
+            session: row.session,
+            title: row.title,
+            updatedAt: row.updatedAt,
+            pinned: Number(row.pinned) === 1
+        }))
+    },
+
+    setPinned(session: string, pinned: boolean): void {
+        const db = getDb()
+        db.prepare(`
+            INSERT INTO chat_session_meta (session, title, pinned, pinned_at)
+            VALUES (?, NULL, ?, ?)
+            ON CONFLICT(session) DO UPDATE SET
+              pinned = excluded.pinned,
+              pinned_at = excluded.pinned_at
+        `).run(session, pinned ? 1 : 0, pinned ? Math.floor(Date.now() / 1000) : null)
+    },
+
+    renameSession(session: string, title: string): void {
+        const db = getDb()
+        const next = title.trim()
+        db.prepare(`
+            INSERT INTO chat_session_meta (session, title, pinned, pinned_at)
+            VALUES (?, ?, 0, NULL)
+            ON CONFLICT(session) DO UPDATE SET title = excluded.title
+        `).run(session, next || null)
+    },
+
+    deleteSession(session: string): void {
+        const db = getDb()
+        const tx = db.transaction(() => {
+            db.prepare('DELETE FROM chat_history WHERE session = ?').run(session)
+            db.prepare('DELETE FROM chat_session_meta WHERE session = ?').run(session)
+        })
+        tx()
+    },
+
+    getMessages(session: string): ChatRecord[] {
+        const db = getDb()
+        return db.prepare(`
+            SELECT * FROM chat_history
+            WHERE session = ?
+            ORDER BY id ASC
+        `).all(session) as ChatRecord[]
     }
 }

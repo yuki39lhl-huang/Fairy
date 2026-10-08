@@ -7,7 +7,7 @@ export type AgentPhase = 'idle' | 'thinking' | 'tools' | 'streaming'
 const TOOL_LABELS: Record<string, string> = {
   web_search: '联网搜索',
   get_current_time: '校准时间',
-  set_reminder: '设置提醒',
+  reminder: '定时任务',
   translate_text: '翻译',
   add_account_record: '记账',
   get_account_summary: '账目汇总',

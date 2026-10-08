@@ -9,6 +9,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import { agentEventBus } from '../agentEventBus'
 import { showFairyFloat } from '../fairyFloatWindow'
 import { synthesizeSpeech } from '../voice/ttsClient'
+import { fallbackReminderLine, predictReminderPromptSkill } from '../skills'
 
 export type ReminderStatus = 'pending' | 'fired' | 'cancelled'
 
@@ -22,6 +23,8 @@ export interface ReminderRecord {
   fireAt: number
   status: ReminderStatus
   source: ReminderSource
+  /** 根据事项预测的到点台词，聊天和手动创建共用 */
+  spoken?: string
 }
 
 const MAX_HISTORY = 40
@@ -32,6 +35,7 @@ const fireTimers = new Map<string, NodeJS.Timeout>()
 const prefetchTimers = new Map<string, NodeJS.Timeout>()
 const audioCache = new Map<string, Buffer>()
 const prefetchInFlight = new Set<string>()
+const spokenJobs = new Map<string, Promise<void>>()
 
 let reminders: ReminderRecord[] = []
 
@@ -62,10 +66,41 @@ function notifyChange(): void {
   agentEventBus.emit('reminder:changed', { reminders: listReminders() })
 }
 
+function fairyLine(item: ReminderRecord): string {
+  return item.spoken?.trim() || fallbackReminderLine(item.message)
+}
+
+function ensureSpoken(id: string): Promise<void> {
+  const existing = spokenJobs.get(id)
+  if (existing) return existing
+  const job = predictSpoken(id).finally(() => {
+    spokenJobs.delete(id)
+  })
+  spokenJobs.set(id, job)
+  return job
+}
+
+async function predictSpoken(id: string): Promise<void> {
+  const item = reminders.find((r) => r.id === id)
+  if (!item || item.status !== 'pending' || item.spoken?.trim()) return
+  try {
+    const line = await Promise.race([
+      predictReminderPromptSkill.execute({ message: item.message }),
+      new Promise<string>((resolve) => setTimeout(() => resolve(''), 8000))
+    ])
+    const latest = reminders.find((r) => r.id === id && r.status === 'pending')
+    if (!latest || !line) return
+    latest.spoken = line
+    audioCache.delete(id)
+    persist()
+    notifyChange()
+  } catch (err) {
+    console.warn('[Reminder] 提示词预测失败，到点改用事项本身:', err)
+  }
+}
+
 function buildSpeakText(item: ReminderRecord): string {
-  const content = (item.message || '').trim() || '提醒'
-  // 人工创建：朗读加前缀；Fairy 创建：文案里通常已有「主人」称呼
-  return item.source === 'manual' ? `主人，提醒时间到了——${content}` : content
+  return fairyLine(item)
 }
 
 function clearPrefetch(id: string): void {
@@ -85,15 +120,16 @@ function clearFireTimer(id: string): void {
 async function prefetchAudio(id: string): Promise<void> {
   const item = reminders.find((r) => r.id === id)
   if (!item || item.status !== 'pending') return
+  if (!item.spoken?.trim()) await ensureSpoken(id)
   if (audioCache.has(id) || prefetchInFlight.has(id)) return
 
   prefetchInFlight.add(id)
   try {
     const speakText = buildSpeakText(item)
     const { audioBuffer } = await synthesizeSpeech(speakText, { scene: 'reminder' })
-    // 仍是同一条 pending 才写入缓存
+    // 文案若已改过，丢掉旧合成，避免错误提醒被读出来
     const latest = reminders.find((r) => r.id === id)
-    if (latest && latest.status === 'pending') {
+    if (latest && latest.status === 'pending' && buildSpeakText(latest) === speakText) {
       audioCache.set(id, audioBuffer)
       console.log('[Reminder] 语音预合成完成:', id)
     }
@@ -134,7 +170,7 @@ function fireReminder(id: string): void {
   persist()
 
   try {
-    const content = (item.message || '').trim() || '提醒'
+    const content = fairyLine(item)
     const speakText = buildSpeakText(item)
     void showFairyFloat(content, {
       speak: true,
@@ -189,7 +225,93 @@ export function scheduleReminder(
   persist()
   armTimer(record)
   notifyChange()
+  void ensureSpoken(record.id)
   return record
+}
+
+function formatRemain(seconds: number): string {
+  const sec = Math.max(0, Math.round(seconds))
+  if (sec < 60) return `${sec} 秒`
+  const minutes = Math.floor(sec / 60)
+  const rest = sec % 60
+  if (minutes < 60) return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分钟`
+  const hours = Math.floor(minutes / 60)
+  const remMin = minutes % 60
+  return remMin ? `${hours} 小时 ${remMin} 分钟` : `${hours} 小时`
+}
+
+export function pendingReminders(): ReminderRecord[] {
+  return reminders
+    .filter((r) => r.status === 'pending')
+    .sort((a, b) => a.fireAt - b.fireAt)
+}
+
+/** 供系统提示使用：让模型在同一轮就能按 id 修改或取消，而不是再新建一条 */
+export function formatPendingRemindersForPrompt(): string {
+  const pending = pendingReminders()
+  if (pending.length === 0) {
+    return `\n\n[进行中的定时提醒]\n当前没有。新建调用 reminder 技能，action=create。`
+  }
+  const now = Date.now()
+  const lines = pending.map((r) => {
+    const remain = formatRemain((r.fireAt - now) / 1000)
+    return `- id=${r.id} | 约 ${remain} 后 | ${r.message}`
+  })
+  return `\n\n[进行中的定时提醒·以本段为准]\n${lines.join('\n')}\n主人要修改、纠正或取消其中某一条时，调用 reminder 技能：action=update 或 action=delete，并带上对应 id。只改文案时不要传 delaySeconds，到点时间保持不变。禁止 action=create 另建一条把错误的留着，也禁止只在回复里声称已删除、已更正或已合并。`
+}
+
+export function resolvePendingReminder(opts: {
+  id?: string
+  match?: string
+  latest?: boolean
+}): ReminderRecord | undefined {
+  const pending = pendingReminders()
+  const id = opts.id?.trim()
+  if (id) return pending.find((r) => r.id === id)
+  const match = opts.match?.trim()
+  if (match) {
+    const hits = pending.filter((r) => r.message.includes(match))
+    return hits.sort((a, b) => b.createdAt - a.createdAt)[0]
+  }
+  if (opts.latest) {
+    return [...pending].sort((a, b) => b.createdAt - a.createdAt)[0]
+  }
+  return undefined
+}
+
+export function updateReminder(
+  id: string,
+  patch: { message?: string; delaySeconds?: number }
+): { ok: true; record: ReminderRecord; keptTime: boolean } | { ok: false; error: string } {
+  const item = reminders.find((r) => r.id === id && r.status === 'pending')
+  if (!item) return { ok: false, error: '没有找到这条进行中的提醒，可能已经响过或被取消。' }
+
+  const nextMessage = patch.message?.trim()
+  const hasDelay = patch.delaySeconds != null && Number.isFinite(patch.delaySeconds)
+  if (!nextMessage && !hasDelay) {
+    return { ok: false, error: '没有要修改的内容或时间。' }
+  }
+  if (hasDelay && (patch.delaySeconds as number) <= 0) {
+    return { ok: false, error: '新的延迟时间必须大于 0。' }
+  }
+
+  if (nextMessage) {
+    item.message = nextMessage
+    item.spoken = undefined
+    audioCache.delete(id)
+    void ensureSpoken(id)
+  }
+  let keptTime = true
+  if (hasDelay) {
+    item.fireAt = Date.now() + Math.round((patch.delaySeconds as number) * 1000)
+    keptTime = false
+  }
+
+  clearPrefetch(id)
+  persist()
+  armTimer(item)
+  notifyChange()
+  return { ok: true, record: item, keptTime }
 }
 
 export function cancelReminder(id: string): boolean {
@@ -230,7 +352,12 @@ export function hydrateReminders(): void {
           : /^主人/.test(msg)
             ? 'fairy'
             : 'manual'
-      return { ...r, message: msg || r.message, source }
+      return {
+        ...r,
+        message: msg || r.message,
+        source,
+        spoken: typeof r.spoken === 'string' ? r.spoken : undefined
+      }
     })
   } catch (err) {
     console.warn('[Reminder] 读取失败，从空列表开始:', err)
@@ -244,6 +371,11 @@ export function hydrateReminders(): void {
       item.status = 'fired'
     } else {
       armTimer(item)
+      if (!item.spoken?.includes('主人')) {
+        item.spoken = undefined
+        audioCache.delete(item.id)
+        void ensureSpoken(item.id)
+      }
     }
   }
   trimHistory()

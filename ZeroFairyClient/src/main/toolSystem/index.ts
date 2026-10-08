@@ -4,7 +4,7 @@
 import { BaseTool } from './baseTool'
 import { GetCurrentTimeTool } from './plugins/getCurrentTime'
 import { WebSearchTool } from './plugins/webSearch'
-import { SetReminderTool } from './plugins/setReminder'
+import { skillsToTools } from '../skillSystem'
 import { TranslateTool } from './plugins/translate'
 import { AddAccountRecordTool, GetAccountSummaryTool } from './plugins/accounting'
 import { GenerateExcelTool } from './plugins/generateExcel'
@@ -15,7 +15,7 @@ import { GeneratePptTool } from './plugins/pptTool'
 export const allTools: BaseTool[] = [
     new GetCurrentTimeTool(),
     new WebSearchTool(),
-    new SetReminderTool(),
+    ...skillsToTools(),
     new TranslateTool(),
     new AddAccountRecordTool(),
     new GetAccountSummaryTool(),

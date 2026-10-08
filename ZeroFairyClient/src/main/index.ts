@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, session } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, screen, session, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -37,6 +37,13 @@ import {
   bootstrapFairyPet
 } from './fairyPetWindow'
 import { memoryDb } from './db/memoryBase'
+import { chatHistoryDb } from './db/chatHistory'
+import {
+  getBgmDir,
+  listBgmTracks,
+  readBgmTrack,
+  registerBgmProtocol
+} from './bgmSystem'
 
 function purgeIdentityMemories(): void {
   try {
@@ -101,48 +108,10 @@ async function saveMicDebugFile(audioBuffer: Buffer): Promise<string> {
 
 let voiceCallWindow: BrowserWindow | null = null
 
-/**
- * 一轮对话真正结束时的收尾逻辑：推事件、存历史、提炼记忆、合成语音。
- * 两处onDone（直接回复 / 工具调用后回复）共用这一个函数，避免重复代码。
- */
-/* function finalizeAssistantTurn(userText: string, fullReply: string): void {
-  agentEventBus.emit('ai:done', {})
-  const session = new Date().toDateString()
-  saveDailogHistory(session, userText, fullReply)
-  maybeExtractMemory(userText, fullReply)
-
-  // 开关1：关了的话这轮不合成语音，直接结束
-  if (!storeManager.getVoiceEnabled()) return
-
-  synthesizeSpeech(fullReply)
-    .then(async ({ audioBuffer }) => {
-      // 通话窗口开着时，语音只推给它，主窗口不再重复播放同一段声音
-      if (voiceCallWindow && !voiceCallWindow.isDestroyed()) {
-        voiceCallWindow.webContents.send('ag-ui-event', {
-          type: 'ai:audio-ready',
-          payload: { audioData: audioBuffer }
-        })
-      } else {
-        agentEventBus.emit('ai:audio-ready', { audioData: audioBuffer })
-      }
-
-      if (storeManager.getVoiceSaveToFile()) {
-        const fs = await import('fs')
-        const outputDir = join(app.getPath('documents'), 'ZeroFairyClient', '语音')
-        if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true })
-
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-        const filePath = join(outputDir, `fairy-${timestamp}.wav`)
-        await fs.promises.writeFile(filePath, audioBuffer)
-        console.log('[voice] 已额外保存音频文件:', filePath)
-      }
-    })
-    .catch((err) => {
-      console.error('[voice] 语音合成失败:', err instanceof Error ? err.message : String(err))
-    })
-} */
 /** 每轮用户提问递增；过期的合成结果一律丢弃，避免「新问题播旧语音」 */
 let speechGeneration = 0
+/** 当前这一轮要写入的会话 id（渲染端新对话会换一个） */
+let activeChatSession = ''
 let activeTtsQueue: { cancel: () => void } | null = null
 
 function beginSpeechTurn(): number {
@@ -168,7 +137,7 @@ function finalizeAssistantTurn(
   generation: number
 ): void {
   agentEventBus.emit('ai:done', {})
-  const session = new Date().toDateString()
+  const session = activeChatSession || new Date().toDateString()
   saveDailogHistory(session, userText, fullReply)
   maybeExtractMemory(userText, fullReply)
 
@@ -284,12 +253,18 @@ function forwardEmotionToRenderer(emotion: string): void {
 }
 
 function createWindow(): BrowserWindow {
+  const { width: screenW, height: screenH } = screen.getPrimaryDisplay().workAreaSize
   const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
+    width: Math.max(860, Math.round(screenW * 0.62)),
+    height: Math.max(560, Math.round(screenH * 0.62)),
+    minWidth: 860,
+    minHeight: 560,
     show: false,
+    frame: false,
+    title: 'Fairy',
+    backgroundColor: '#151515',
     autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
+    icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
@@ -388,17 +363,59 @@ app.whenReady().then(() => {
   getDb()
   initAccountingTable() // 初始化会计表
   purgeIdentityMemories()
+  registerBgmProtocol()
   importWorldBookFromDocs()
   hydrateReminders()
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('com.fairy.desktop')
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  ipcMain.handle('chat:list-sessions', (_event, lane?: string) =>
+    chatHistoryDb.listSessions(200, lane === 'code' ? 'code' : 'chat')
+  )
+  ipcMain.handle('chat:set-pinned', (_event, sessionId: string, pinned: boolean) => {
+    if (!sessionId) return false
+    chatHistoryDb.setPinned(sessionId, !!pinned)
+    return true
+  })
+  ipcMain.handle('chat:rename-session', (_event, sessionId: string, title: string) => {
+    if (!sessionId) return false
+    chatHistoryDb.renameSession(sessionId, String(title ?? ''))
+    return true
+  })
+  ipcMain.handle('chat:delete-session', (_event, sessionId: string) => {
+    if (!sessionId) return false
+    chatHistoryDb.deleteSession(sessionId)
+    return true
+  })
+  ipcMain.handle('chat:get-messages', (_event, sessionId: string) => {
+    if (!sessionId || typeof sessionId !== 'string') return []
+    return chatHistoryDb.getMessages(sessionId)
+  })
+
+  ipcMain.handle('code:get-project-dir', () => storeManager.getCodeProjectDir())
+  ipcMain.handle('code:pick-project-dir', async (event) => {
+    const parent = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.OpenDialogOptions = {
+      title: '选择项目文件夹',
+      properties: ['openDirectory']
+    }
+    const result = parent
+      ? await dialog.showOpenDialog(parent, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled || !result.filePaths[0]) return null
+    return storeManager.setCodeProjectDir(result.filePaths[0])
+  })
+
   ipcMain.handle(
     'send-message',
-    async (_event, text: string, history: ChatMessage[]) => {
+    async (_event, text: string, history: ChatMessage[], sessionId?: string) => {
+      activeChatSession =
+        typeof sessionId === 'string' && sessionId.trim()
+          ? sessionId.trim()
+          : new Date().toDateString()
       console.log('[Main 1] 收到 send-message:', text)
 
       try {
@@ -611,12 +628,44 @@ app.whenReady().then(() => {
     return next
   })
 
+  ipcMain.handle('bgm:list-tracks', () => ({
+    dir: getBgmDir(),
+    tracks: listBgmTracks()
+  }))
+  ipcMain.handle('bgm:read-track', (_event, fileName: string) => {
+    const { data, mime, fileName: name } = readBgmTrack(fileName)
+    return { data, mime, fileName: name }
+  })
+  ipcMain.handle('bgm:get-settings', () => storeManager.getBgmSettings())
+  ipcMain.handle('bgm:set-settings', (_event, partial: Record<string, unknown>) => {
+    return storeManager.setBgmSettings(partial as Parameters<typeof storeManager.setBgmSettings>[0])
+  })
+
   ipcMain.handle('get-voice-enabled', () => {
     return storeManager.getVoiceEnabled()
   })
 
   ipcMain.handle('open-voice-call-window', () => {
     createVoiceCallWindow()
+  })
+
+  ipcMain.handle('window-minimize', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize()
+  })
+
+  ipcMain.handle('window-toggle-maximize', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win || win.isDestroyed()) return false
+    if (win.isMaximized()) {
+      win.unmaximize()
+      return false
+    }
+    win.maximize()
+    return true
+  })
+
+  ipcMain.handle('window-close', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.close()
   })
 
   ipcMain.handle('minimize-voice-call-window', () => {

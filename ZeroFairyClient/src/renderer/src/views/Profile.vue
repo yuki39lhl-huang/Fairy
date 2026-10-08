@@ -13,6 +13,8 @@ interface UserProfile {
   assistant2CustomName: string
 }
 
+defineProps<{ embedded?: boolean }>()
+
 const profile = ref<UserProfile>({
   displayName: '主人',
   avatarDataUrl: '',
@@ -130,8 +132,8 @@ async function saveProfile(): Promise<void> {
 </script>
 
 <template>
-  <div class="profile">
-    <header class="head">
+  <div class="profile" :class="{ embedded }">
+    <header v-if="!embedded" class="head">
       <h1 class="title">个人设置</h1>
       <p class="sub">
         名字与头像保存在本机（侧栏展示）。主人选哲/铃时，Fairy 只认角色身份；本地显示名仅在「自定义」时用于对话称呼。
@@ -262,6 +264,13 @@ async function saveProfile(): Promise<void> {
   padding: 28px 36px 40px;
   background: var(--agent-bg);
   color: var(--agent-text);
+}
+
+.profile.embedded {
+  height: auto;
+  overflow: visible;
+  padding: 0;
+  background: transparent;
 }
 
 .head {

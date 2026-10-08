@@ -34,21 +34,6 @@ search(query: string, limit = 3): WorldBookEntry[] {
   return matched.slice(0, limit)
 },
 
-  // 获取所有条目（知识库管理页面用）
-  getAll(): WorldBookEntry[] {
-    const db = getDb()
-    return db.prepare(`
-      SELECT id, title, keywords, created_at FROM worldbook
-      ORDER BY created_at DESC
-    `).all() as WorldBookEntry[]
-  },
-
-  // 删除一条条目
-  delete(id: number): void {
-    const db = getDb()
-    db.prepare('DELETE FROM worldbook WHERE id = ?').run(id)
-  },
-
   // 清空所有知识条目（重新导入前调用）
   clearAll(): void {
     const db = getDb()

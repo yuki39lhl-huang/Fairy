@@ -1,10 +1,12 @@
 <!-- Settings: harness-style section rail + preference rows. -->
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import Profile from './Profile.vue'
+import BackgroundMusic from './BackgroundMusic.vue'
 
-type SectionId = 'models' | 'search' | 'voice'
+type SectionId = 'profile' | 'bgm' | 'api' | 'voice'
 
-const section = ref<SectionId>('models')
+const section = ref<SectionId>('profile')
 const apiKey = ref('')
 const savedMask = ref('')
 const saving = ref(false)
@@ -43,12 +45,6 @@ const fairyStatus = ref<{
 const ensuringVoice = ref(false)
 let statusTimer: ReturnType<typeof setInterval> | null = null
 let unsubPetState: (() => void) | null = null
-
-const sections: { id: SectionId; label: string; hint: string }[] = [
-  { id: 'models', label: '模型', hint: 'DeepSeek API' },
-  { id: 'search', label: '搜索', hint: 'Tavily 联网' },
-  { id: 'voice', label: '语音', hint: '厂家与声线' }
-]
 
 const fairyStatusLabel = computed(() => {
   switch (fairyStatus.value.status) {
@@ -224,32 +220,64 @@ async function retryEnsureVoice(): Promise<void> {
       <h1 class="rail-title">设置</h1>
       <nav class="rail-nav">
         <button
-          v-for="item in sections"
-          :key="item.id"
           type="button"
           class="rail-item"
-          :class="{ active: section === item.id }"
-          @click="section = item.id"
+          :class="{ active: section === 'profile' }"
+          @click="section = 'profile'"
         >
-          <span class="rail-label">{{ item.label }}</span>
-          <span class="rail-hint">{{ item.hint }}</span>
+          <span class="rail-label">个人资料</span>
+          <span class="rail-hint">名字、头像与身份</span>
+        </button>
+        <button
+          type="button"
+          class="rail-item"
+          :class="{ active: section === 'bgm' }"
+          @click="section = 'bgm'"
+        >
+          <span class="rail-label">背景音乐</span>
+          <span class="rail-hint">曲库与音量</span>
+        </button>
+        <button
+          type="button"
+          class="rail-item"
+          :class="{ active: section === 'api' }"
+          @click="section = 'api'"
+        >
+          <span class="rail-label">API</span>
+          <span class="rail-hint">模型与搜索密钥</span>
+        </button>
+        <button
+          type="button"
+          class="rail-item"
+          :class="{ active: section === 'voice' }"
+          @click="section = 'voice'"
+        >
+          <span class="rail-label">语音</span>
+          <span class="rail-hint">厂家与声线</span>
         </button>
       </nav>
     </aside>
 
     <div class="pane">
-      <!-- Models -->
-      <section v-show="section === 'models'" class="pane-block">
+      <section v-if="section === 'profile'" class="pane-block">
+        <Profile embedded />
+      </section>
+
+      <section v-if="section === 'bgm'" class="pane-block">
+        <BackgroundMusic embedded />
+      </section>
+
+      <section v-if="section === 'api'" class="pane-block">
         <header class="pane-head">
-          <h2 class="pane-title">模型</h2>
-          <p class="pane-sub">配置 DeepSeek API，保存后立即可用，无需重启。</p>
+          <h2 class="pane-title">API</h2>
+          <p class="pane-sub">模型与联网搜索的密钥放在这里，保存后立即可用，无需重启。</p>
         </header>
 
         <div class="field">
           <div class="field-copy">
             <div class="field-label">DeepSeek API Key</div>
             <p class="field-desc">
-              状态：
+              对话模型。状态：
               <span class="status" :class="{ ok: !!savedMask }">
                 {{ savedMask || '未配置' }}
               </span>
@@ -274,20 +302,12 @@ async function retryEnsureVoice(): Promise<void> {
             </button>
           </div>
         </div>
-      </section>
-
-      <!-- Search -->
-      <section v-show="section === 'search'" class="pane-block">
-        <header class="pane-head">
-          <h2 class="pane-title">搜索</h2>
-          <p class="pane-sub">Tavily 用于联网搜索；未配置时相关工具不可用。</p>
-        </header>
 
         <div class="field">
           <div class="field-copy">
             <div class="field-label">Tavily API Key</div>
             <p class="field-desc">
-              状态：
+              联网搜索；未配置时相关工具不可用。状态：
               <span class="status" :class="{ ok: !!savedTavilyMask }">
                 {{ savedTavilyMask || '未配置' }}
               </span>
@@ -315,7 +335,7 @@ async function retryEnsureVoice(): Promise<void> {
       </section>
 
       <!-- Voice -->
-      <section v-show="section === 'voice'" class="pane-block">
+      <section v-if="section === 'voice'" class="pane-block">
         <header class="pane-head">
           <h2 class="pane-title">语音</h2>
           <p class="pane-sub">
@@ -571,16 +591,20 @@ async function retryEnsureVoice(): Promise<void> {
 .rail {
   width: 200px;
   flex-shrink: 0;
-  padding: 28px 14px 20px;
+  padding: 0 14px 20px;
   border-right: 0.5px solid var(--agent-border-strong);
   background: var(--agent-sidebar);
 }
 
 .rail-title {
-  margin: 0 10px 18px;
-  font-size: 15px;
+  display: flex;
+  align-items: center;
+  height: 56px;
+  margin: 0 12px 8px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.01em;
+  line-height: 1;
 }
 
 .rail-nav {
@@ -628,12 +652,15 @@ async function retryEnsureVoice(): Promise<void> {
 .pane {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  margin-top: 56px;
   overflow-y: auto;
-  padding: 28px 36px 40px;
+  padding: 4px 28px 40px 36px;
 }
 
 .pane-block {
-  width: min(640px, 100%);
+  width: 100%;
+  max-width: none;
 }
 
 .pane-head {

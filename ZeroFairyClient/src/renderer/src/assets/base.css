@@ -1,6 +1,6 @@
 /* Agent UI tokens — aligned with DeepSeek Harness dark (bluish neutrals + DS blue). */
 :root {
-  --agent-bg: #151517;
+  --agent-bg: #151515;
   --agent-sidebar: #1b1b1c;
   --agent-sidebar-hover: rgba(255, 255, 255, 0.08);
   --agent-sidebar-active: #43454a;

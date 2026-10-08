@@ -7,7 +7,6 @@ import { useChatStore } from './stores/chatStore'
 import { useLlmStore } from './stores/llmStore'
 import { useVoiceCallStore } from './stores/voiceCallStore'
 import { playReplyAudio, stopReplyAudio } from './services/audioPlayer'
-import './services/micRecorder'  // 临时：只是为了让micRecorder.ts被加载执行，测完这行删掉
 
 const router = useRouter()
 const chatStore = useChatStore()
