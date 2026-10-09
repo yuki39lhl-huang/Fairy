@@ -10,6 +10,8 @@ import FairyEyeCanvas from '../components/FairyEyeCanvas/FairyEyeCanvas.vue'
 const chatStore = useChatStore()
 const llmStore = useLlmStore()
 const workMode = inject<Ref<'chat' | 'code'>>('workMode', ref('chat'))
+const codeProjectName = inject<Ref<string>>('codeProjectName', ref(''))
+const codeProjectFocus = inject<Ref<boolean>>('codeProjectFocus', ref(false))
 
 const inputText = ref('')
 const messagesEl = ref<HTMLElement>()
@@ -116,9 +118,23 @@ function escapeHtml(raw: string): string {
 }
 
 function inlineMarkdown(raw: string): string {
-  return raw
+  return linkify(raw)
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+}
+
+/** 整段网址收成站点名，避免在句子中间折行。 */
+function linkify(escaped: string): string {
+  return escaped.replace(/(?:（|\()?https?:\/\/[^\s<）)]+(?:）|\))?/g, (token) => {
+    const url = token.replace(/^[（(]+|[）)]+$/g, '').replace(/[.,，。；;]+$/g, '')
+    let label = '来源'
+    try {
+      label = new URL(url).hostname.replace(/^www\./, '')
+    } catch {
+      label = '来源'
+    }
+    return `<a class="src" href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`
+  })
 }
 
 function isBlockStart(line: string): boolean {
@@ -132,7 +148,9 @@ function isBlockStart(line: string): boolean {
 
 /** 标题、加粗、有序/无序列表和段落，接近 Claude 的正文节奏 */
 function formatMessageHtml(raw: string): string {
-  const lines = escapeHtml(raw).replace(/\r\n/g, '\n').split('\n')
+  const lines = escapeHtml(raw.replace(/\[emotion:[^\]]*\]/gi, ''))
+    .replace(/\r\n/g, '\n')
+    .split('\n')
   const blocks: string[] = []
   let index = 0
 
@@ -191,9 +209,13 @@ function formatMessageHtml(raw: string): string {
 </script>
 
 <template>
-  <div class="chat" :class="{ idle: isEmpty && workMode === 'chat' }">
+  <div class="chat" :class="{ idle: isEmpty && (workMode === 'chat' || codeProjectFocus) }">
     <div ref="messagesEl" class="thread">
-      <div v-if="workMode === 'code'" class="hero">
+      <div v-if="workMode === 'code' && isEmpty && codeProjectFocus" class="hero">
+        <h1 class="hero-title">你想让我们在 {{ codeProjectName }} 中做什么？</h1>
+      </div>
+
+      <div v-else-if="workMode === 'code' && isEmpty" class="hero">
         <div class="hero-row">
           <img class="hero-mark" :src="fairyMark" alt="" />
           <h1 class="hero-title">Code</h1>
@@ -234,13 +256,13 @@ function formatMessageHtml(raw: string): string {
       </div>
     </div>
 
-    <div v-if="workMode !== 'code'" class="composer-wrap">
+    <div v-if="workMode !== 'code' || codeProjectFocus" class="composer-wrap">
       <div class="composer">
         <textarea
           v-model="inputText"
           class="composer-input"
           rows="1"
-          placeholder="给 Fairy 发消息"
+          :placeholder="codeProjectFocus ? '描述想在这个文件夹里做的事' : '给 Fairy 发消息'"
           :disabled="llmStore.isGenerating || micState !== 'idle'"
           @keydown="handleKeydown"
         />
@@ -432,6 +454,7 @@ function formatMessageHtml(raw: string): string {
 
 .bubble-text.md :deep(p) {
   margin: 0 0 0.85em;
+  overflow-wrap: break-word;
 }
 
 .bubble-text.md :deep(p:last-child) {
@@ -484,6 +507,13 @@ function formatMessageHtml(raw: string): string {
   padding: 0.08em 0.35em;
   border-radius: 5px;
   background: rgba(255, 255, 255, 0.08);
+}
+
+.bubble-text.md :deep(a.src) {
+  color: #c9d4ff;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(201, 212, 255, 0.45);
+  overflow-wrap: normal;
 }
 
 .cursor {

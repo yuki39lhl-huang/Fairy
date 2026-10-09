@@ -5,11 +5,11 @@ import {
   getBgmCurrentTime,
   getBgmDuration,
   getBgmSnapshot,
-  getCurrentTrack,
   onBgmState,
   playTrack,
   seekBgm,
   seekBgmBy,
+  setBgmCurrentId,
   setBgmEnabled,
   setBgmPlayMode,
   setBgmTrackList,
@@ -18,6 +18,22 @@ import {
   type BgmTrack
 } from '../services/bgmPlayer'
 import { setFairyVoiceVolume } from '../services/audioPlayer'
+
+function applyTrackOrder(list: BgmTrack[], order: string[]): BgmTrack[] {
+  if (!order.length) return list
+  const byId = new Map(list.map((track) => [track.id, track]))
+  const next: BgmTrack[] = []
+  for (const id of order) {
+    const track = byId.get(id)
+    if (!track) continue
+    next.push(track)
+    byId.delete(id)
+  }
+  for (const track of list) {
+    if (byId.has(track.id)) next.push(track)
+  }
+  return next
+}
 
 export const useBgmStore = defineStore('bgm', () => {
   const tracks = ref<BgmTrack[]>([])
@@ -35,12 +51,56 @@ export const useBgmStore = defineStore('bgm', () => {
   let unsubState: (() => void) | null = null
   let persistTimer: ReturnType<typeof setTimeout> | null = null
   let progressTimer: ReturnType<typeof setInterval> | null = null
+  let hideBound = false
 
-  const currentTrack = computed(() => getCurrentTrack())
   const progress = computed(() => {
     if (duration.value <= 0) return 0
     return Math.min(1, Math.max(0, currentTime.value / duration.value))
   })
+
+  function settingsPayload(): {
+    enabled: boolean
+    playMode: BgmPlayMode
+    bgmVolume: number
+    fairyVoiceVolume: number
+    lastTrackId?: string | null
+    trackOrder?: string[]
+  } {
+    const payload: {
+      enabled: boolean
+      playMode: BgmPlayMode
+      bgmVolume: number
+      fairyVoiceVolume: number
+      lastTrackId?: string | null
+      trackOrder?: string[]
+    } = {
+      enabled: enabled.value,
+      playMode: playMode.value,
+      bgmVolume: bgmVolume.value,
+      fairyVoiceVolume: fairyVoiceVolume.value
+    }
+    if (tracks.value.length || currentId.value) {
+      payload.lastTrackId = currentId.value
+    }
+    if (tracks.value.length) payload.trackOrder = tracks.value.map((track) => track.id)
+    return payload
+  }
+
+  function persistNow(): void {
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = null
+    }
+    void window.api?.setBgmSettings(settingsPayload())
+  }
+
+  function bindHideFlush(): void {
+    if (hideBound) return
+    hideBound = true
+    window.addEventListener('pagehide', () => {
+      window.api?.flushBgmSettings?.(settingsPayload())
+    })
+  }
 
   function syncProgress(): void {
     currentTime.value = getBgmCurrentTime()
@@ -68,13 +128,7 @@ export const useBgmStore = defineStore('bgm', () => {
   function schedulePersist(): void {
     if (persistTimer) clearTimeout(persistTimer)
     persistTimer = setTimeout(() => {
-      void window.api.setBgmSettings({
-        enabled: enabled.value,
-        playMode: playMode.value,
-        bgmVolume: bgmVolume.value,
-        fairyVoiceVolume: fairyVoiceVolume.value,
-        lastTrackId: currentId.value
-      })
+      persistNow()
     }, 200)
   }
 
@@ -85,24 +139,24 @@ export const useBgmStore = defineStore('bgm', () => {
       window.api.getBgmSettings()
     ])
     libraryDir.value = listRes.dir
-    setBgmTrackList(listRes.tracks)
-    tracks.value = listRes.tracks
+    const ordered = applyTrackOrder(listRes.tracks, settings.trackOrder ?? [])
+    setBgmTrackList(ordered)
 
     enabled.value = settings.enabled
     playMode.value = settings.playMode
     bgmVolume.value = settings.bgmVolume
     fairyVoiceVolume.value = settings.fairyVoiceVolume
-    currentId.value = settings.lastTrackId
+
+    const resumeId =
+      settings.lastTrackId && ordered.some((track) => track.id === settings.lastTrackId)
+        ? settings.lastTrackId
+        : (ordered[0]?.id ?? null)
+    currentId.value = resumeId
+    setBgmCurrentId(resumeId)
 
     setBgmPlayMode(settings.playMode)
     setBgmVolume(settings.bgmVolume)
     setFairyVoiceVolume(settings.fairyVoiceVolume)
-
-    if (settings.lastTrackId && listRes.tracks.some((t) => t.id === settings.lastTrackId)) {
-      currentId.value = settings.lastTrackId
-    } else {
-      currentId.value = listRes.tracks[0]?.id ?? null
-    }
 
     unsubState?.()
     unsubState = onBgmState(() => {
@@ -110,25 +164,44 @@ export const useBgmStore = defineStore('bgm', () => {
       schedulePersist()
     })
     ensureProgressTimer()
+    bindHideFlush()
 
-    // 首次默认关闭；若用户曾打开则恢复播放
-    if (settings.enabled && currentId.value) {
+    if (settings.enabled && resumeId) {
       await setBgmEnabled(true)
-      await playTrack(currentId.value)
     } else {
       await setBgmEnabled(false)
     }
 
     syncFromPlayer()
+    currentId.value = resumeId && tracks.value.some((track) => track.id === resumeId) ? resumeId : currentId.value
     ready.value = true
+    persistNow()
   }
 
   async function refreshTracks(): Promise<void> {
     const listRes = await window.api.listBgmTracks()
     libraryDir.value = listRes.dir
-    setBgmTrackList(listRes.tracks)
-    tracks.value = listRes.tracks
-    syncFromPlayer()
+    const ordered = applyTrackOrder(
+      listRes.tracks,
+      tracks.value.map((track) => track.id)
+    )
+    setBgmTrackList(ordered)
+    persistNow()
+  }
+
+  function moveTrack(from: number, to: number): void {
+    if (from === to || from < 0 || to < 0 || from >= tracks.value.length || to >= tracks.value.length) {
+      return
+    }
+    const next = tracks.value.slice()
+    const [item] = next.splice(from, 1)
+    if (!item) return
+    next.splice(to, 0, item)
+    setBgmTrackList(next)
+  }
+
+  function commitTrackOrder(): void {
+    persistNow()
   }
 
   async function toggleEnabled(next?: boolean): Promise<void> {
@@ -157,13 +230,15 @@ export const useBgmStore = defineStore('bgm', () => {
   }
 
   async function selectTrack(id: string): Promise<void> {
+    currentId.value = id
+    setBgmCurrentId(id)
     if (!enabled.value) {
       enabled.value = true
       await setBgmEnabled(true)
+    } else {
+      await playTrack(id)
     }
-    currentId.value = id
-    await playTrack(id)
-    schedulePersist()
+    persistNow()
   }
 
   async function seekTo(seconds: number): Promise<void> {
@@ -185,13 +260,13 @@ export const useBgmStore = defineStore('bgm', () => {
     fairyVoiceVolume,
     currentId,
     playing,
-    ready,
-    currentTrack,
     currentTime,
     duration,
     progress,
     bootstrap,
     refreshTracks,
+    moveTrack,
+    commitTrackOrder,
     toggleEnabled,
     changePlayMode,
     changeBgmVolume,

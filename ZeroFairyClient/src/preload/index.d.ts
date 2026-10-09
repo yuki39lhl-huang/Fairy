@@ -32,7 +32,10 @@ interface Api {
   ) => Promise<string>
   listChatSessions: (
     lane?: 'chat' | 'code'
-  ) => Promise<Array<{ session: string; title: string; updatedAt: number; pinned: boolean }>>
+  ) => Promise<
+    Array<{ session: string; title: string; updatedAt: number; pinned: boolean; projectDir: string }>
+  >
+  bindChatProject: (sessionId: string, projectDir: string) => Promise<boolean>
   setChatPinned: (sessionId: string, pinned: boolean) => Promise<boolean>
   renameChatSession: (sessionId: string, title: string) => Promise<boolean>
   deleteChatSession: (sessionId: string) => Promise<boolean>
@@ -40,7 +43,10 @@ interface Api {
     sessionId: string
   ) => Promise<Array<{ role: 'user' | 'assistant'; content: string }>>
   getCodeProjectDir: () => Promise<string>
+  listCodeProjectDirs: () => Promise<string[]>
   pickCodeProjectDir: () => Promise<string | null>
+  clearCodeProjectDir: () => Promise<string>
+  removeCodeProjectDir: (dir: string) => Promise<string[]>
   onAgUiEvent: (callback: (event: { type: string; payload: unknown }) => void) => void
   saveApiKey: (provider: string, key: string) => Promise<void>
   getApiKey: (provider: string) => Promise<string>
@@ -81,6 +87,8 @@ interface Api {
   onFairyFloatAudio: (callback: (payload: { audioData: Uint8Array }) => void) => () => void
   notifyFairyFloatReady: () => Promise<void>
   notifyFairyFloatSpeechEnded: () => Promise<void>
+  noteIdleActivity: () => void
+  setVoiceCallMuted: (muted: boolean) => void
   transcribeSpeech: (audioPath: string) => Promise<TranscribeResult>
   openVoiceCallWindow: () => Promise<void>
   minimizeWindow: () => Promise<void>
@@ -166,6 +174,7 @@ interface Api {
     bgmVolume: number
     fairyVoiceVolume: number
     lastTrackId: string | null
+    trackOrder: string[]
   }>
   setBgmSettings: (
     partial: Partial<{
@@ -174,6 +183,7 @@ interface Api {
       bgmVolume: number
       fairyVoiceVolume: number
       lastTrackId: string | null
+      trackOrder: string[]
     }>
   ) => Promise<{
     enabled: boolean
@@ -181,7 +191,18 @@ interface Api {
     bgmVolume: number
     fairyVoiceVolume: number
     lastTrackId: string | null
+    trackOrder: string[]
   }>
+  flushBgmSettings: (
+    partial: Partial<{
+      enabled: boolean
+      playMode: 'loop-one' | 'loop-all' | 'shuffle'
+      bgmVolume: number
+      fairyVoiceVolume: number
+      lastTrackId: string | null
+      trackOrder: string[]
+    }>
+  ) => void
   getFairyPetState: () => Promise<{
     enabled: boolean
     visible: boolean

@@ -23,6 +23,8 @@ export interface BgmSettings {
   bgmVolume: number
   fairyVoiceVolume: number
   lastTrackId: string | null
+  /** 用户拖出来的曲目顺序，元素是文件名 */
+  trackOrder: string[]
 }
 
 /** 网易云常见命名：作者 - 歌名.ext */
@@ -111,6 +113,3 @@ export function readBgmTrack(fileName: string): { data: Buffer; mime: string; fi
   return { data, mime: mimeForExt(extname(safe)), fileName: safe }
 }
 
-export function registerBgmProtocol(): void {
-  console.log('[bgm] 曲库目录:', getBgmDir())
-}

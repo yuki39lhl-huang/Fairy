@@ -92,19 +92,22 @@ function startSpectrumLoop(): void {
     analyser.getByteFrequencyData(freqData as Uint8Array<ArrayBuffer>)
     const bins: number[] = []
     const len = freqData.length
-    // 对数取频段：低音更宽、更跳；高频更细
+    // 对数取频段：低音更宽，高频更细。指数小于 1，弱频段不会被压成一条线
     for (let i = 0; i < SPECTRUM_BARS; i++) {
       const t0 = i / SPECTRUM_BARS
       const t1 = (i + 1) / SPECTRUM_BARS
       const start = Math.floor(Math.pow(t0, 1.7) * len * 0.85)
       const end = Math.max(start + 1, Math.floor(Math.pow(t1, 1.7) * len * 0.85))
       let sum = 0
-      for (let j = start; j < end && j < len; j++) sum += freqData[j]
-      const avg = sum / (end - start)
-      // 压低整体增益，避免一响就全部顶满、脉冲分不出高低
-      let v = Math.pow(avg / 255, 1.35)
-      v = Math.min(1, v * 1.05)
-      if (v < 0.03) v = 0
+      let count = 0
+      for (let j = start; j < end && j < len; j++) {
+        sum += freqData[j]
+        count += 1
+      }
+      const avg = count > 0 ? sum / count : 0
+      let v = Math.pow(avg / 255, 0.82)
+      v = Math.min(1, v * 1.08)
+      if (v < 0.02) v = 0
       bins.push(v)
     }
     emitSpectrum(bins)
@@ -236,6 +239,15 @@ export function setBgmTrackList(next: BgmTrack[]): void {
   emitState()
 }
 
+/** 只记住要续播的曲目，先不开始放。避免一开声就落到列表第一首。 */
+export function setBgmCurrentId(id: string | null): void {
+  if (id && tracks.some((track) => track.id === id)) {
+    currentId = id
+    return
+  }
+  if (!id) currentId = null
+}
+
 export function setBgmPlayMode(mode: BgmPlayMode): void {
   playMode = mode
   emitState()
@@ -304,10 +316,6 @@ export async function setBgmEnabled(next: boolean): Promise<void> {
     null
   if (prefer) await playTrack(prefer)
   emitState()
-}
-
-export function getCurrentTrack(): BgmTrack | null {
-  return tracks.find((t) => t.id === currentId) ?? null
 }
 
 /** 当前播放进度（秒） */

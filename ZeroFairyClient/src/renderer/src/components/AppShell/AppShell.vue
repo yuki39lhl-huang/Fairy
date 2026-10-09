@@ -28,13 +28,17 @@ interface SessionRow {
   title: string
   updatedAt: number
   pinned?: boolean
+  projectDir?: string
 }
 
 const sessions = ref<SessionRow[]>([])
 const historyOpen = ref(true)
 const pinsOpen = ref(true)
 const projectOpen = ref(false)
-const projectDir = ref('')
+const projectDirs = ref<string[]>([])
+const folderOpen = ref<Record<string, boolean>>({})
+const focusedProjectDir = ref('')
+const projectMenu = ref<{ x: number; y: number; dir: string } | null>(null)
 const historyMenu = ref<{ session: string; x: number; y: number } | null>(null)
 const renamingSession = ref('')
 const renameDraft = ref('')
@@ -48,9 +52,12 @@ const avatarDataUrl = ref('')
 const spectrumCanvas = ref<HTMLCanvasElement | null>(null)
 let unsubProfile: (() => void) | null = null
 let unsubSpectrum: (() => void) | null = null
-/** 扫描头位置 0–1 */
-let pulseScan = 0
+/** 沿基线走动的脉冲，走到尽头时下一颗从左侧淡入 */
+let pulses: { x: number }[] = [{ x: 0 }]
+let barLevels: number[] = []
 let lastPulseAt = 0
+const PULSE_SPEED = 0.16
+const PULSE_FADE = 0.16
 
 const avatarLetter = computed(() => {
   const name = displayName.value.trim() || '主'
@@ -116,19 +123,24 @@ function drawSpectrum(bins: number[]): void {
   const now = performance.now()
   const dt = lastPulseAt ? Math.min(0.05, (now - lastPulseAt) / 1000) : 1 / 60
   lastPulseAt = now
+  if (barLevels.length !== n) barLevels = new Array(n).fill(0)
 
   for (let i = 0; i < n; i++) {
     const v = levels[i] ?? 0
-    // 相对本帧最强频段拉开：弱的贴着基线，强的才拉高
-    const shaped = frameMax < 0.08 ? 0 : Math.pow(Math.min(1, v / frameMax), 1.65)
+    // 不再用 1.65 次方把弱柱压扁，半高的柱子能占到大约七成高度，起伏才看得出来
+    const ratio = frameMax < 0.05 ? 0 : Math.min(1, v / frameMax)
+    const target = Math.pow(ratio, 0.55)
+    const follow = target > barLevels[i] ? 0.72 : 0.28
+    barLevels[i] += (target - barLevels[i]) * follow
+    const shaped = barLevels[i]
     const rise = shaped * maxRise
-    if (rise < 1.5) continue
+    if (rise < 1.2) continue
     const x = left + (i + 0.5) * slot
     ctx.save()
-    ctx.shadowColor = `rgba(170, 205, 255, ${0.35 + shaped * 0.65})`
-    ctx.shadowBlur = 4 + shaped * 8
-    ctx.strokeStyle = `rgba(${Math.round(150 + shaped * 90)}, ${Math.round(190 + shaped * 50)}, 255, ${0.35 + shaped * 0.65})`
-    ctx.lineWidth = shaped > 0.72 ? 1.6 : 1.1
+    ctx.shadowColor = `rgba(170, 205, 255, ${0.28 + shaped * 0.72})`
+    ctx.shadowBlur = 3 + shaped * 8
+    ctx.strokeStyle = `rgba(${Math.round(150 + shaped * 90)}, ${Math.round(190 + shaped * 50)}, 255, ${0.32 + shaped * 0.68})`
+    ctx.lineWidth = shaped > 0.72 ? 1.6 : 1.15
     ctx.lineJoin = 'miter'
     ctx.beginPath()
     ctx.moveTo(x, midY)
@@ -139,27 +151,40 @@ function drawSpectrum(bins: number[]): void {
     ctx.restore()
   }
 
-  // 约 6 秒走完一圈（原先约 1 秒）
-  pulseScan = (pulseScan + dt * 0.16) % 1
-  const hx = left + pulseScan * width
-  const head = ctx.createLinearGradient(hx - 22, midY, hx, midY)
-  head.addColorStop(0, 'rgba(122, 170, 255, 0)')
-  head.addColorStop(1, 'rgba(232, 242, 255, 0.95)')
-  ctx.strokeStyle = head
-  ctx.lineWidth = 1.5
-  ctx.beginPath()
-  ctx.moveTo(Math.max(left, hx - 22), midY)
-  ctx.lineTo(hx, midY)
-  ctx.stroke()
+  for (const pulse of pulses) pulse.x += dt * PULSE_SPEED
+  const rightmost = pulses.reduce((best, pulse) => (pulse.x > best.x ? pulse : best), pulses[0])
+  if (pulses.length < 2 && rightmost.x >= 1 - PULSE_FADE) {
+    pulses.push({ x: rightmost.x - 1 })
+  }
+  pulses = pulses.filter((pulse) => pulse.x < 1 + PULSE_FADE)
 
-  ctx.save()
-  ctx.shadowColor = 'rgba(190, 216, 255, 0.95)'
-  ctx.shadowBlur = 8
-  ctx.fillStyle = '#f4f8ff'
-  ctx.beginPath()
-  ctx.arc(hx, midY, 1.7, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.restore()
+  for (const pulse of pulses) {
+    const x = pulse.x
+    let alpha = 1
+    if (x < PULSE_FADE) alpha = Math.max(0, x / PULSE_FADE)
+    else if (x > 1) alpha = Math.max(0, 1 - (x - 1) / PULSE_FADE)
+    if (alpha < 0.02 || x < 0) continue
+    const hx = left + x * width
+    const trailEnd = Math.min(hx, left + width)
+    ctx.save()
+    ctx.globalAlpha = alpha
+    const head = ctx.createLinearGradient(hx - 22, midY, trailEnd, midY)
+    head.addColorStop(0, 'rgba(122, 170, 255, 0)')
+    head.addColorStop(1, 'rgba(232, 242, 255, 0.95)')
+    ctx.strokeStyle = head
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.moveTo(Math.max(left, hx - 22), midY)
+    ctx.lineTo(trailEnd, midY)
+    ctx.stroke()
+    ctx.shadowColor = 'rgba(190, 216, 255, 0.95)'
+    ctx.shadowBlur = 8
+    ctx.fillStyle = '#f4f8ff'
+    ctx.beginPath()
+    ctx.arc(Math.min(hx, left + width), midY, 1.7, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
 }
 
 const pinnedSessions = computed(() => sessions.value.filter((row) => row.pinned))
@@ -168,10 +193,29 @@ const historyOverflow = computed(() => unpinnedSessions.value.length > historyFi
 const visibleSessions = computed(() =>
   historyOverflow.value ? unpinnedSessions.value.slice(0, historyFit.value) : unpinnedSessions.value
 )
-const projectName = computed(() => {
-  const parts = projectDir.value.split(/[/\\]/).filter(Boolean)
-  return parts[parts.length - 1] || projectDir.value
-})
+function folderName(dir: string): string {
+  const parts = dir.split(/[/\\]/).filter(Boolean)
+  return parts[parts.length - 1] || dir
+}
+function sameProjectDir(left: string, right: string): boolean {
+  const norm = (value: string): string => value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  return Boolean(left) && Boolean(right) && norm(left) === norm(right)
+}
+function isFolderOpen(dir: string): boolean {
+  const key = dir.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  return folderOpen.value[key] !== false
+}
+function toggleFolder(dir: string): void {
+  const key = dir.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  folderOpen.value = { ...folderOpen.value, [key]: !isFolderOpen(dir) }
+}
+function sessionsFor(dir: string): SessionRow[] {
+  return sessions.value.filter((row) => sameProjectDir(row.projectDir || '', dir))
+}
+const codeProjectName = computed(() => folderName(focusedProjectDir.value))
+const codeProjectFocus = ref(false)
+provide('codeProjectName', codeProjectName)
+provide('codeProjectFocus', codeProjectFocus)
 const newSessionLabel = computed(() => (workMode.value === 'code' ? '新会话' : '新对话'))
 const historyLabel = computed(() => (workMode.value === 'code' ? '会话' : '对话'))
 
@@ -204,6 +248,10 @@ async function refreshSessions(): Promise<void> {
   measureHistory()
 }
 
+function pokeIdle(): void {
+  window.api.noteIdleActivity?.()
+}
+
 onMounted(async () => {
   try {
     applyProfile(await window.api.getUserProfile())
@@ -212,15 +260,22 @@ onMounted(async () => {
   }
   unsubProfile = window.api?.onUserProfileChanged?.(applyProfile) ?? null
   document.addEventListener('pointerdown', onDocumentPointer)
+  window.addEventListener('keydown', pokeIdle)
   void bgmStore.bootstrap()
   unsubSpectrum = onBgmSpectrum((bins) => drawSpectrum(bins))
   drawSpectrum(new Array(32).fill(0))
   void refreshSessions()
   try {
-    projectDir.value = (await window.api.getCodeProjectDir()) || ''
-    projectOpen.value = Boolean(projectDir.value)
+    const listed = await window.api.listCodeProjectDirs?.()
+    if (listed?.length) {
+      projectDirs.value = listed
+    } else {
+      const legacy = (await window.api.getCodeProjectDir?.()) || ''
+      projectDirs.value = legacy ? [legacy] : []
+    }
+    projectOpen.value = projectDirs.value.length > 0
   } catch {
-    projectDir.value = ''
+    projectDirs.value = []
   }
   window.addEventListener('fairy-sessions-changed', onSessionsChanged)
   window.api?.onAgUiEvent?.((event) => {
@@ -241,6 +296,7 @@ onUnmounted(() => {
   historyObserver?.disconnect()
   clearPeekTimer()
   document.removeEventListener('pointerdown', onDocumentPointer)
+  window.removeEventListener('keydown', pokeIdle)
   window.removeEventListener('fairy-sessions-changed', onSessionsChanged)
 })
 
@@ -255,6 +311,8 @@ function isActive(to: string): boolean {
 function doNewChat(): void {
   chatStore.activate(workMode.value)
   chatStore.startNewSession()
+  focusedProjectDir.value = ''
+  codeProjectFocus.value = false
   llmStore.setGenerating(false)
   void refreshSessions()
   if (route.path !== '/chat') void router.push('/chat')
@@ -263,6 +321,9 @@ function doNewChat(): void {
 async function openSession(row: SessionRow): Promise<void> {
   if (llmStore.isGenerating) return
   chatStore.activate(workMode.value)
+  const linked = projectDirs.value.find((dir) => sameProjectDir(dir, row.projectDir || '')) || ''
+  focusedProjectDir.value = linked
+  codeProjectFocus.value = Boolean(linked)
   try {
     const rows = (await window.api?.getChatMessages(row.session)) ?? []
     chatStore.loadSession(
@@ -281,19 +342,70 @@ watch(workMode, (mode) => {
   if (mode === 'code' && route.path === '/schedule') void router.push('/chat')
 })
 
-async function onProjectHead(): Promise<void> {
-  if (!projectDir.value) {
-    await pickProjectDir()
-    return
-  }
+function onProjectHead(): void {
   projectOpen.value = !projectOpen.value
 }
 
 async function pickProjectDir(): Promise<void> {
   const picked = await window.api.pickCodeProjectDir?.()
   if (!picked) return
-  projectDir.value = picked
+  if (!projectDirs.value.some((dir) => sameProjectDir(dir, picked))) {
+    projectDirs.value = [...projectDirs.value, picked]
+  }
   projectOpen.value = true
+  const key = picked.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  folderOpen.value = { ...folderOpen.value, [key]: true }
+}
+
+function startProjectSession(dir: string): void {
+  if (!dir) return
+  projectMenu.value = null
+  const key = dir.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  folderOpen.value = { ...folderOpen.value, [key]: true }
+  chatStore.activate('code')
+  chatStore.startNewSession()
+  llmStore.setGenerating(false)
+  focusedProjectDir.value = dir
+  codeProjectFocus.value = true
+  const sessionId = chatStore.sessionId
+  void (async () => {
+    await window.api?.bindChatProject?.(sessionId, dir)
+    if (window.api?.listChatSessions) await refreshSessions()
+    if (!sessions.value.some((row) => row.session === sessionId)) {
+      sessions.value.unshift({
+        session: sessionId,
+        title: '新会话',
+        updatedAt: Math.floor(Date.now() / 1000),
+        pinned: false,
+        projectDir: dir
+      })
+    }
+  })()
+  if (route.path !== '/chat') void router.push('/chat')
+}
+
+function openProjectMenu(event: MouseEvent, dir: string): void {
+  historyMenu.value = null
+  const target = event.currentTarget
+  if (!(target instanceof HTMLElement)) return
+  const rect = target.getBoundingClientRect()
+  projectMenu.value = {
+    x: Math.min(rect.left, window.innerWidth - 168),
+    y: Math.min(rect.bottom + 4, window.innerHeight - 48),
+    dir
+  }
+}
+
+async function deleteProject(): Promise<void> {
+  const dir = projectMenu.value?.dir || ''
+  projectMenu.value = null
+  if (!dir) return
+  projectDirs.value = projectDirs.value.filter((item) => !sameProjectDir(item, dir))
+  if (sameProjectDir(focusedProjectDir.value, dir)) {
+    focusedProjectDir.value = ''
+    codeProjectFocus.value = false
+  }
+  await window.api.removeCodeProjectDir?.(dir)
 }
 
 function openHistoryPage(): void {
@@ -390,9 +502,13 @@ function closeSettings(): void {
 }
 
 function onDocumentPointer(event: PointerEvent): void {
-  if (historyMenu.value && event.target instanceof Node) {
+  pokeIdle()
+  if ((historyMenu.value || projectMenu.value) && event.target instanceof Node) {
     const menu = document.querySelector('.history-menu')
-    if (!menu || !menu.contains(event.target)) historyMenu.value = null
+    if (!menu || !menu.contains(event.target)) {
+      historyMenu.value = null
+      projectMenu.value = null
+    }
   }
   const root = accountRoot.value
   if (!accountOpen.value || !root) return
@@ -570,21 +686,70 @@ function closeWindow(): void {
           定时任务
         </button>
         <div v-else class="project-block">
-          <button type="button" class="history-head" @click="onProjectHead">
-            <span>项目</span>
-            <span class="history-chevron" :class="{ open: projectOpen && projectDir }" aria-hidden="true">
-              <svg viewBox="0 0 12 12"><path d="M4.2 2.4 7.8 6 4.2 9.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
-            </span>
-          </button>
-          <button
-            v-if="projectOpen && projectDir"
-            type="button"
-            class="history-item"
-            :title="projectDir"
-            @click="pickProjectDir"
-          >
-            {{ projectName }}
-          </button>
+          <div class="history-head project-head">
+            <button type="button" class="project-toggle" @click="onProjectHead">
+              <span>项目</span>
+              <span class="history-chevron" :class="{ open: projectOpen }" aria-hidden="true">
+                <svg viewBox="0 0 12 12"><path d="M4.2 2.4 7.8 6 4.2 9.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              </span>
+            </button>
+            <button type="button" class="project-icon" title="添加项目" aria-label="添加项目" @click="pickProjectDir">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
+            </button>
+          </div>
+          <template v-if="projectOpen">
+            <template v-for="dir in projectDirs" :key="dir">
+              <div class="project-row">
+                <button type="button" class="project-fold" :title="dir" @click="toggleFolder(dir)">
+                  <span class="history-chevron" :class="{ open: isFolderOpen(dir) }" aria-hidden="true">
+                    <svg viewBox="0 0 12 12"><path d="M4.2 2.4 7.8 6 4.2 9.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                  </span>
+                  <span class="project-name">{{ folderName(dir) }}</span>
+                </button>
+                <button type="button" class="project-icon" title="项目选项" aria-label="项目选项" @click="openProjectMenu($event, dir)">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="6" cy="12" r="1.2" fill="currentColor" />
+                    <circle cx="12" cy="12" r="1.2" fill="currentColor" />
+                    <circle cx="18" cy="12" r="1.2" fill="currentColor" />
+                  </svg>
+                </button>
+                <button type="button" class="project-icon" title="新会话" aria-label="在此项目新建会话" @click="startProjectSession(dir)">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M8 6.5h6.2A2 2 0 0 1 16.2 8.5v5.2a2 2 0 0 1-2 2H9.2L6.4 18.2V8.5A2 2 0 0 1 8.4 6.5"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.6"
+                      stroke-linejoin="round"
+                    />
+                    <path
+                      d="M18.2 4.8v5.2M15.6 7.4h5.2"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+              <div v-if="isFolderOpen(dir) && sessionsFor(dir).length" class="project-sessions">
+                <button
+                  v-for="row in sessionsFor(dir)"
+                  :key="row.session"
+                  type="button"
+                  class="history-item"
+                  :class="{ active: chatStore.sessionId === row.session && activePath === '/chat' }"
+                  :title="row.title"
+                  @click="openSession(row)"
+                  @contextmenu.prevent="openHistoryMenu($event, row)"
+                >
+                  {{ row.title }}
+                </button>
+              </div>
+            </template>
+          </template>
         </div>
 
         <div class="history-block">
@@ -742,6 +907,15 @@ function closeWindow(): void {
       </button>
       <button type="button" @click="beginRename(historyMenuRow)">重命名</button>
       <button type="button" class="danger" @click="deleteSession(historyMenuRow)">删除</button>
+    </div>
+
+    <div
+      v-if="projectMenu"
+      class="history-menu"
+      :style="{ left: projectMenu.x + 'px', top: projectMenu.y + 'px' }"
+      @pointerdown.stop
+    >
+      <button type="button" class="danger" @click="deleteProject">删除项目</button>
     </div>
 
   </div>
@@ -992,6 +1166,101 @@ function closeWindow(): void {
 
 .nav-item.active {
   background: var(--agent-sidebar-active);
+  color: var(--agent-text);
+}
+
+.project-block {
+  display: flex;
+  flex-direction: column;
+}
+
+.project-head {
+  gap: 4px;
+}
+
+.project-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.project-sessions {
+  display: flex;
+  flex-direction: column;
+  padding-left: 16px;
+}
+
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 6px 0 12px;
+  border-radius: 8px;
+}
+
+.project-row:hover {
+  background: var(--agent-sidebar-hover);
+}
+
+.project-fold {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.project-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  text-align: left;
+}
+
+.project-icon {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--agent-text-dim);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.project-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.project-icon:hover {
+  background: var(--agent-sidebar-hover);
   color: var(--agent-text);
 }
 

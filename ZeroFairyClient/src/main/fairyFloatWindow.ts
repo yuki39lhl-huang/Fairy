@@ -253,6 +253,10 @@ export async function showFairyFloat(
   scheduleHide(opts.durationMs > 0 ? opts.durationMs : 5500)
 }
 
+export function isFairyFloatShowing(): boolean {
+  return Boolean(floatWindow && !floatWindow.isDestroyed() && floatWindow.isVisible())
+}
+
 export function hideFairyFloat(): void {
   speakToken += 1
   clearHideTimer()

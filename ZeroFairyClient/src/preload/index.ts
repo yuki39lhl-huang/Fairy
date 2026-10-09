@@ -11,8 +11,12 @@ const api = {
 
   listChatSessions: (
     lane: 'chat' | 'code' = 'chat'
-  ): Promise<Array<{ session: string; title: string; updatedAt: number; pinned: boolean }>> =>
-    ipcRenderer.invoke('chat:list-sessions', lane),
+  ): Promise<
+    Array<{ session: string; title: string; updatedAt: number; pinned: boolean; projectDir: string }>
+  > => ipcRenderer.invoke('chat:list-sessions', lane),
+
+  bindChatProject: (sessionId: string, projectDir: string): Promise<boolean> =>
+    ipcRenderer.invoke('chat:bind-project', sessionId, projectDir),
 
   setChatPinned: (sessionId: string, pinned: boolean): Promise<boolean> =>
     ipcRenderer.invoke('chat:set-pinned', sessionId, pinned),
@@ -29,7 +33,11 @@ const api = {
     ipcRenderer.invoke('chat:get-messages', sessionId),
 
   getCodeProjectDir: (): Promise<string> => ipcRenderer.invoke('code:get-project-dir'),
+  listCodeProjectDirs: (): Promise<string[]> => ipcRenderer.invoke('code:list-project-dirs'),
   pickCodeProjectDir: (): Promise<string | null> => ipcRenderer.invoke('code:pick-project-dir'),
+  clearCodeProjectDir: (): Promise<string> => ipcRenderer.invoke('code:clear-project-dir'),
+  removeCodeProjectDir: (dir: string): Promise<string[]> =>
+    ipcRenderer.invoke('code:remove-project-dir', dir),
 
   // 订阅 AG-UI 事件流（渲染进程用这个监听主进程推送的所有事件）
   onAgUiEvent: (callback: (event: { type: string; payload: unknown }) => void): void => {
@@ -136,6 +144,14 @@ const api = {
 
   notifyFairyFloatSpeechEnded: (): Promise<void> =>
     ipcRenderer.invoke('fairy-float:speech-ended'),
+
+  noteIdleActivity: (): void => {
+    ipcRenderer.send('idle:activity')
+  },
+
+  setVoiceCallMuted: (muted: boolean): void => {
+    ipcRenderer.send('voice-call:muted', muted)
+  },
 
   transcribeSpeech: (
     audioPath: string
@@ -248,6 +264,7 @@ const api = {
     bgmVolume: number
     fairyVoiceVolume: number
     lastTrackId: string | null
+    trackOrder: string[]
   }> => ipcRenderer.invoke('bgm:get-settings'),
   setBgmSettings: (
     partial: Partial<{
@@ -256,6 +273,7 @@ const api = {
       bgmVolume: number
       fairyVoiceVolume: number
       lastTrackId: string | null
+      trackOrder: string[]
     }>
   ): Promise<{
     enabled: boolean
@@ -263,7 +281,20 @@ const api = {
     bgmVolume: number
     fairyVoiceVolume: number
     lastTrackId: string | null
+    trackOrder: string[]
   }> => ipcRenderer.invoke('bgm:set-settings', partial),
+  flushBgmSettings: (
+    partial: Partial<{
+      enabled: boolean
+      playMode: 'loop-one' | 'loop-all' | 'shuffle'
+      bgmVolume: number
+      fairyVoiceVolume: number
+      lastTrackId: string | null
+      trackOrder: string[]
+    }>
+  ): void => {
+    ipcRenderer.send('bgm:flush-settings', partial)
+  },
 
   getFairyPetState: (): Promise<{
     enabled: boolean

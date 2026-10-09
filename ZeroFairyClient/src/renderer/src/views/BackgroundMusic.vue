@@ -116,7 +116,65 @@ function onSeekPointerDown(e: PointerEvent): void {
   el.addEventListener('pointercancel', onUp)
 }
 
+const draggingId = ref<string | null>(null)
+let suppressRowClick = false
+
+function onGripPointerDown(e: PointerEvent, index: number): void {
+  if (e.button !== 0) return
+  e.stopPropagation()
+  const grip = e.currentTarget as HTMLElement
+  const row = grip.closest('.track') as HTMLElement | null
+  if (!row) return
+  try {
+    grip.setPointerCapture(e.pointerId)
+  } catch {
+    /* 指针还没真正按下时，改听窗口上的移动 */
+  }
+  const startIndex = index
+  const startY = e.clientY
+  const rowHeight = Math.max(28, row.getBoundingClientRect().height)
+  draggingId.value = tracks.value[index]?.id ?? null
+  let moved = false
+
+  const onMove = (ev: PointerEvent): void => {
+    if (ev.pointerId !== e.pointerId && ev.pointerId !== undefined) return
+    const from = tracks.value.findIndex((track) => track.id === draggingId.value)
+    if (from < 0) return
+    const delta = Math.round((ev.clientY - startY) / rowHeight)
+    const to = Math.min(tracks.value.length - 1, Math.max(0, startIndex + delta))
+    if (to === from) return
+    moved = true
+    bgm.moveTrack(from, to)
+  }
+  const onUp = (ev: PointerEvent): void => {
+    if (ev.pointerId !== e.pointerId && ev.pointerId !== undefined) return
+    draggingId.value = null
+    if (moved) {
+      suppressRowClick = true
+      bgm.commitTrackOrder()
+      setTimeout(() => {
+        suppressRowClick = false
+      }, 0)
+    }
+    try {
+      if (grip.hasPointerCapture(ev.pointerId)) grip.releasePointerCapture(ev.pointerId)
+    } catch {
+      /* ignore */
+    }
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', onUp)
+    window.removeEventListener('pointercancel', onUp)
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+  window.addEventListener('pointercancel', onUp)
+}
+
 function onTrackRowClick(id: string): void {
+  if (suppressRowClick) {
+    suppressRowClick = false
+    return
+  }
   void bgm.selectTrack(id)
 }
 </script>
@@ -195,7 +253,10 @@ function onTrackRowClick(id: string): void {
 
     <section class="block">
       <div class="row between">
-        <div class="label">曲目 · {{ tracks.length }}</div>
+        <div>
+          <div class="label">曲目 · {{ tracks.length }}</div>
+          <p class="hint">按住左侧把手，上下拖动即可排序</p>
+        </div>
         <button type="button" class="link" @click="bgm.refreshTracks()">刷新列表</button>
       </div>
       <p class="path">{{ libraryDir || '…' }}</p>
@@ -205,9 +266,22 @@ function onTrackRowClick(id: string): void {
           v-for="(track, index) in tracks"
           :key="track.id"
           class="track"
-          :class="{ active: track.id === currentId, playing: track.id === currentId && playing }"
+          :class="{
+            active: track.id === currentId,
+            playing: track.id === currentId && playing,
+            dragging: track.id === draggingId
+          }"
           @click="onTrackRowClick(track.id)"
         >
+          <button
+            type="button"
+            class="grip"
+            aria-label="拖动排序"
+            @pointerdown="onGripPointerDown($event, index)"
+            @click.stop
+          >
+            <i /><i /><i /><i /><i /><i />
+          </button>
           <span class="idx">{{ index + 1 }}</span>
           <div class="meta" :class="{ 'with-seek': track.id === currentId }">
             <span class="song">{{ track.title }}</span>
@@ -419,12 +493,50 @@ function onTrackRowClick(id: string): void {
 
 .track {
   display: grid;
-  grid-template-columns: 28px 1fr auto;
+  grid-template-columns: 22px 28px 1fr auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 10px 12px;
   border-radius: 10px;
   cursor: pointer;
+}
+
+.track.dragging {
+  opacity: 0.72;
+  background: var(--agent-sidebar-hover);
+}
+
+.grip {
+  display: grid;
+  grid-template-columns: repeat(2, 3px);
+  gap: 2px;
+  width: 18px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--agent-text-dim);
+  cursor: grab;
+  touch-action: none;
+  align-content: center;
+  justify-content: center;
+}
+
+.grip i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  pointer-events: none;
+}
+
+.grip:hover {
+  color: var(--agent-text);
+}
+
+.grip:active {
+  cursor: grabbing;
 }
 
 .track:hover {

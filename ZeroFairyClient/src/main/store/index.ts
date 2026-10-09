@@ -16,7 +16,8 @@ export const DEFAULT_BGM_SETTINGS: BgmSettings = {
   playMode: 'loop-all',
   bgmVolume: 0.35,
   fairyVoiceVolume: 1,
-  lastTrackId: null
+  lastTrackId: null,
+  trackOrder: []
 }
 
 interface StoreSchema {
@@ -45,8 +46,10 @@ interface StoreSchema {
   desktopPetBounds: { x: number; y: number; width: number; height: number } | null
   userProfile: UserProfile
   bgmSettings: BgmSettings
-  /** Code 模式当前项目目录，空字符串表示还没选 */
+  /** 旧字段：只存过一个项目目录 */
   codeProjectDir: string
+  /** Code 模式已添加的项目目录 */
+  codeProjectDirs: string[]
 }
 
 const encryptionKey = createHash('sha256')
@@ -70,7 +73,8 @@ const store = new ElectronStore({
     desktopPetBounds: null,
     userProfile: DEFAULT_USER_PROFILE,
     bgmSettings: DEFAULT_BGM_SETTINGS,
-    codeProjectDir: ''
+    codeProjectDir: '',
+    codeProjectDirs: []
   }
 }) as unknown as import('electron-store').default<StoreSchema>
 
@@ -170,7 +174,8 @@ export const storeManager = {
       playMode,
       bgmVolume: clamp01(raw.bgmVolume ?? DEFAULT_BGM_SETTINGS.bgmVolume),
       fairyVoiceVolume: clamp01(raw.fairyVoiceVolume ?? DEFAULT_BGM_SETTINGS.fairyVoiceVolume),
-      lastTrackId: typeof raw.lastTrackId === 'string' ? raw.lastTrackId : null
+      lastTrackId: typeof raw.lastTrackId === 'string' ? raw.lastTrackId : null,
+      trackOrder: sanitizeTrackOrder(raw.trackOrder)
     }
   },
   setBgmSettings(partial: Partial<BgmSettings>): BgmSettings {
@@ -180,22 +185,75 @@ export const storeManager = {
     if (next.playMode !== 'loop-one' && next.playMode !== 'loop-all' && next.playMode !== 'shuffle') {
       next.playMode = 'loop-all'
     }
+    next.lastTrackId = typeof next.lastTrackId === 'string' ? next.lastTrackId : null
+    next.trackOrder = sanitizeTrackOrder(next.trackOrder)
     store.set('bgmSettings', next)
     return next
   },
 
   getCodeProjectDir(): string {
-    const dir = store.get('codeProjectDir')
-    return typeof dir === 'string' ? dir : ''
+    return this.listCodeProjectDirs()[0] || ''
   },
   setCodeProjectDir(dir: string): string {
     const next = dir.trim()
-    store.set('codeProjectDir', next)
+    if (!next) {
+      store.set('codeProjectDirs', [])
+      store.set('codeProjectDir', '')
+      return ''
+    }
+    this.addCodeProjectDir(next)
     return next
+  },
+  listCodeProjectDirs(): string[] {
+    const saved = store.get('codeProjectDirs')
+    const dirs = Array.isArray(saved)
+      ? saved.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : []
+    if (dirs.length) return dirs
+    const legacy = store.get('codeProjectDir')
+    if (typeof legacy === 'string' && legacy.trim()) {
+      const migrated = [legacy.trim()]
+      store.set('codeProjectDirs', migrated)
+      return migrated
+    }
+    return []
+  },
+  addCodeProjectDir(dir: string): string {
+    const next = dir.trim()
+    if (!next) return ''
+    const dirs = this.listCodeProjectDirs()
+    if (dirs.some((item) => sameDir(item, next))) return dirs.find((item) => sameDir(item, next)) || next
+    const updated = [...dirs, next]
+    store.set('codeProjectDirs', updated)
+    store.set('codeProjectDir', updated[0] || '')
+    return next
+  },
+  removeCodeProjectDir(dir: string): string[] {
+    const updated = this.listCodeProjectDirs().filter((item) => !sameDir(item, dir))
+    store.set('codeProjectDirs', updated)
+    store.set('codeProjectDir', updated[0] || '')
+    return updated
   }
+}
+
+function sameDir(left: string, right: string): boolean {
+  const norm = (value: string): string => value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  return Boolean(left) && Boolean(right) && norm(left) === norm(right)
 }
 
 function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0
   return Math.min(1, Math.max(0, n))
+}
+
+function sanitizeTrackOrder(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const order: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || !item || seen.has(item)) continue
+    seen.add(item)
+    order.push(item)
+  }
+  return order
 }

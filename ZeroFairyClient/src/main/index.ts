@@ -31,7 +31,8 @@ import {
   clearFinishedReminders,
   scheduleReminder
 } from './reminderSystem'
-import { showFairyFloat, onFairyFloatSpeechEnded, registerFairyFloatIpc } from './fairyFloatWindow'
+import { onFairyFloatSpeechEnded, registerFairyFloatIpc, showFairyFloat } from './fairyFloatWindow'
+import { noteIdleActivity, registerIdleDialogueIpc, setCallIdleEnabled, startIdleDialogues } from './idleDialogue'
 import {
   registerFairyPetIpc,
   bootstrapFairyPet
@@ -41,8 +42,7 @@ import { chatHistoryDb } from './db/chatHistory'
 import {
   getBgmDir,
   listBgmTracks,
-  readBgmTrack,
-  registerBgmProtocol
+  readBgmTrack
 } from './bgmSystem'
 
 function purgeIdentityMemories(): void {
@@ -107,6 +107,8 @@ async function saveMicDebugFile(audioBuffer: Buffer): Promise<string> {
 }
 
 let voiceCallWindow: BrowserWindow | null = null
+let voiceCallMuted = false
+let chatBusy = false
 
 /** 每轮用户提问递增；过期的合成结果一律丢弃，避免「新问题播旧语音」 */
 let speechGeneration = 0
@@ -274,8 +276,25 @@ function createWindow(): BrowserWindow {
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
     agentEventBus.register(mainWindow.webContents)
-
-    // 主窗口起来后再问候，避免和启动抢同一时刻；等 TTS 就绪再一起弹出
+    startIdleDialogues(
+      () => chatBusy,
+      () => Boolean(voiceCallWindow && !voiceCallWindow.isDestroyed() && voiceCallMuted),
+      async (spoken) => {
+        if (!voiceCallWindow || voiceCallWindow.isDestroyed() || !voiceCallMuted) return false
+        try {
+          const { audioBuffer } = await synthesizeSpeech(spoken, { scene: 'idle' })
+          if (!voiceCallWindow || voiceCallWindow.isDestroyed() || !voiceCallMuted) return false
+          voiceCallWindow.webContents.send('ag-ui-event', {
+            type: 'ai:audio-ready',
+            payload: { audioData: audioBuffer }
+          })
+          return true
+        } catch (err) {
+          console.warn('[idle] 通话内待机台词合成失败:', err)
+          return true
+        }
+      }
+    )
     setTimeout(() => {
       void showFairyFloat('主人，我正处在空闲中。', {
         speak: true,
@@ -347,6 +366,8 @@ function createVoiceCallWindow(): void {
 
   voiceCallWindow.on('closed', () => {
     voiceCallWindow = null
+    voiceCallMuted = false
+    setCallIdleEnabled(false)
   })
 }
 
@@ -363,7 +384,7 @@ app.whenReady().then(() => {
   getDb()
   initAccountingTable() // 初始化会计表
   purgeIdentityMemories()
-  registerBgmProtocol()
+  console.log('[bgm] 曲库目录:', getBgmDir())
   importWorldBookFromDocs()
   hydrateReminders()
   electronApp.setAppUserModelId('com.fairy.desktop')
@@ -375,6 +396,12 @@ app.whenReady().then(() => {
   ipcMain.handle('chat:list-sessions', (_event, lane?: string) =>
     chatHistoryDb.listSessions(200, lane === 'code' ? 'code' : 'chat')
   )
+  ipcMain.handle('chat:bind-project', (_event, sessionId: string, projectDir: string) => {
+    if (!sessionId || typeof sessionId !== 'string') return false
+    if (!projectDir || typeof projectDir !== 'string') return false
+    chatHistoryDb.bindProject(sessionId, projectDir)
+    return true
+  })
   ipcMain.handle('chat:set-pinned', (_event, sessionId: string, pinned: boolean) => {
     if (!sessionId) return false
     chatHistoryDb.setPinned(sessionId, !!pinned)
@@ -396,6 +423,12 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('code:get-project-dir', () => storeManager.getCodeProjectDir())
+  ipcMain.handle('code:list-project-dirs', () => storeManager.listCodeProjectDirs())
+  ipcMain.handle('code:clear-project-dir', () => storeManager.setCodeProjectDir(''))
+  ipcMain.handle('code:remove-project-dir', (_event, dir: string) => {
+    if (!dir || typeof dir !== 'string') return storeManager.listCodeProjectDirs()
+    return storeManager.removeCodeProjectDir(dir)
+  })
   ipcMain.handle('code:pick-project-dir', async (event) => {
     const parent = BrowserWindow.fromWebContents(event.sender)
     const options: Electron.OpenDialogOptions = {
@@ -406,12 +439,14 @@ app.whenReady().then(() => {
       ? await dialog.showOpenDialog(parent, options)
       : await dialog.showOpenDialog(options)
     if (result.canceled || !result.filePaths[0]) return null
-    return storeManager.setCodeProjectDir(result.filePaths[0])
+    return storeManager.addCodeProjectDir(result.filePaths[0])
   })
 
   ipcMain.handle(
     'send-message',
     async (_event, text: string, history: ChatMessage[], sessionId?: string) => {
+      noteIdleActivity()
+      chatBusy = true
       activeChatSession =
         typeof sessionId === 'string' && sessionId.trim()
           ? sessionId.trim()
@@ -569,6 +604,9 @@ app.whenReady().then(() => {
         const err = error instanceof Error ? error : new Error(String(error))
         agentEventBus.emit('ai:error', { message: err.message })
         return 'error'
+      } finally {
+        chatBusy = false
+        noteIdleActivity()
       }
     }
   )
@@ -639,6 +677,9 @@ app.whenReady().then(() => {
   ipcMain.handle('bgm:get-settings', () => storeManager.getBgmSettings())
   ipcMain.handle('bgm:set-settings', (_event, partial: Record<string, unknown>) => {
     return storeManager.setBgmSettings(partial as Parameters<typeof storeManager.setBgmSettings>[0])
+  })
+  ipcMain.on('bgm:flush-settings', (_event, partial: Record<string, unknown>) => {
+    storeManager.setBgmSettings(partial as Parameters<typeof storeManager.setBgmSettings>[0])
   })
 
   ipcMain.handle('get-voice-enabled', () => {
@@ -791,6 +832,11 @@ app.whenReady().then(() => {
   createWindow()
 
   registerFairyFloatIpc()
+  registerIdleDialogueIpc()
+  ipcMain.on('voice-call:muted', (_event, muted: boolean) => {
+    voiceCallMuted = Boolean(muted)
+    setCallIdleEnabled(voiceCallMuted)
+  })
   registerFairyPetIpc()
   bootstrapFairyPet()
   ipcMain.handle('fairy-float:speech-ended', () => {

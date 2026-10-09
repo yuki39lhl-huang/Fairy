@@ -65,6 +65,14 @@ function initTables(): void {
       pinned_at INTEGER
     )
   `)
+  ensureColumn('chat_session_meta', 'project_dir', 'TEXT')
+  ensureColumn('chat_session_meta', 'opened_at', 'INTEGER')
 
     console.log('[DB] 所有表初始化完成')
+}
+
+function ensureColumn(table: string, column: string, ddl: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+  if (cols.some((col) => col.name === column)) return
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`)
 }

@@ -110,6 +110,10 @@ function handleKeydown(e: KeyboardEvent) {
   }
 }
 
+watch(callState, (state) => {
+  window.api.setVoiceCallMuted(state === 'muted')
+})
+
 watch(
   () => voiceCallStore.isSpeaking,
   (speaking) => {
