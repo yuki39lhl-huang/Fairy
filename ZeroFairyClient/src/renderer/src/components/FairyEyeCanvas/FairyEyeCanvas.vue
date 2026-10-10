@@ -1,12 +1,12 @@
 ﻿<!-- Fairy HDD eye: deterministic seven-layer composition, not a human Live2D model. -->
 <template>
-  <div ref="container" class="fairy-eye-container">
-    <canvas ref="canvas"></canvas>
+  <div :ref="bindContainer" class="fairy-eye-container">
+    <canvas :ref="bindCanvas"></canvas>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch, type WatchStopHandle } from 'vue'
+import { getCurrentInstance, onUnmounted, ref, watch, type WatchStopHandle } from 'vue'
 import * as PIXI from 'pixi.js'
 import { useVoiceCallStore } from '../../stores/voiceCallStore'
 import { IdleScanController } from '../../services/idleScanController'
@@ -67,6 +67,28 @@ const container = ref<HTMLElement | null>(null)
 const canvas = ref<HTMLCanvasElement | null>(null)
 const voiceCallStore = useVoiceCallStore()
 
+let eyeStarting = false
+
+function scheduleMount(): void {
+  const root = container.value
+  const view = canvas.value
+  if (!root || !view || app || eyeStarting) return
+  queueMicrotask(() => {
+    if (!container.value || !canvas.value || app || eyeStarting) return
+    void mountEye(container.value, canvas.value)
+  })
+}
+
+function bindContainer(el: Element | null): void {
+  container.value = el instanceof HTMLElement ? el : null
+  if (el) scheduleMount()
+}
+
+function bindCanvas(el: Element | null): void {
+  canvas.value = el instanceof HTMLCanvasElement ? el : null
+  if (el) scheduleMount()
+}
+
 let app: PIXI.Application | null = null
 let background: PIXI.Sprite | null = null
 let eyeRoot: PIXI.Container | null = null
@@ -83,6 +105,17 @@ const gaze = new GazeFocusController()
 let emotionBias = EMOTION_BIAS.normal
 let emotionUntil = 0
 let baseL2Rotation = 0
+let sizeObserver: ResizeObserver | null = null
+
+function syncRendererSize(root: HTMLElement): void {
+  if (!app) return
+  const width = root.clientWidth
+  const height = root.clientHeight
+  if (width < 2 || height < 2) return
+  if (app.screen.width === width && app.screen.height === height) return
+  app.renderer.resize(width, height)
+  layoutScene()
+}
 
 function layoutScene(): void {
   if (!app || !eyeRoot) return
@@ -150,25 +183,39 @@ function makeSprite(
   return sprite
 }
 
-onMounted(async () => {
-  if (!container.value || !canvas.value) return
+const eyeInstance = getCurrentInstance()
+
+async function mountEye(root: HTMLElement, view: HTMLCanvasElement): Promise<void> {
+  if (app || eyeStarting) return
+  eyeStarting = true
+  const instance = eyeInstance
 
   app = new PIXI.Application()
   await app.init({
-    canvas: canvas.value,
-    resizeTo: container.value,
+    canvas: view,
+    resizeTo: root,
     backgroundAlpha: 0,
     antialias: true,
     preference: 'webgl',
     resolution: window.devicePixelRatio || 1,
     autoDensity: true
   })
+  if (instance?.isUnmounted) {
+    app.destroy({ removeView: false }, { children: true })
+    app = null
+    return
+  }
 
   const assetUrls = [
     ...(props.hideBackground ? [] : [`/fairy/layers_v4/background.png?v=${ASSET_VER}`]),
     ...LAYER_NAMES.map((name) => `/fairy/layers_v4/${name}.png?v=${ASSET_VER}`)
   ]
   const assets = await PIXI.Assets.load(assetUrls)
+  if (!app || instance?.isUnmounted) {
+    app?.destroy({ removeView: false }, { children: true })
+    app = null
+    return
+  }
 
   if (!props.hideBackground) {
     background = new PIXI.Sprite(assets[`/fairy/layers_v4/background.png?v=${ASSET_VER}`])
@@ -190,7 +237,9 @@ onMounted(async () => {
     layers[name] = makeSprite(texture, parent, localX, localY, name)
   }
   eyeRoot.addChild(eyeWhiteRoot)
-  layoutScene()
+  syncRendererSize(root)
+  sizeObserver = new ResizeObserver(() => syncRendererSize(root))
+  sizeObserver.observe(root)
 
   idleScan = new IdleScanController(gaze, {
     idleDelayMs: 3000,
@@ -263,15 +312,17 @@ onMounted(async () => {
 
     layoutScene()
   })
-})
+}
 
 onUnmounted(() => {
   stopSpeakingWatch?.()
   stopEmotionWatch?.()
   if (emotionTimer !== null) window.clearTimeout(emotionTimer)
   idleScan?.destroy()
+  sizeObserver?.disconnect()
+  sizeObserver = null
   mouthSyncChannel?.close()
-  app?.destroy(true, { children: true, texture: true })
+  app?.destroy({ removeView: true }, { children: true })
   app = null
   background = null
   eyeRoot = null

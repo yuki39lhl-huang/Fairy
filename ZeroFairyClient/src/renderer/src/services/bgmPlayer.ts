@@ -31,6 +31,7 @@ let playing = false
 let pausedAt = 0
 let startedAtCtx = 0
 let activeBuffer: AudioBuffer | null = null
+let loadedFileName: string | null = null
 
 const spectrumListeners = new Set<SpectrumListener>()
 const stateListeners = new Set<StateListener>()
@@ -267,10 +268,13 @@ export async function playTrack(id: string): Promise<void> {
     const ctx = getCtx()
     if (ctx.state === 'suspended') await ctx.resume()
 
-    const same = currentId === id && activeBuffer
+    // 不能用 currentId 判断是不是同一首。点另一首时会先改 currentId，缓冲区仍是上一首。
+    const buffer =
+      loadedFileName === track.fileName && activeBuffer
+        ? activeBuffer
+        : await decodeTrack(track.fileName)
     currentId = id
-    const buffer = same ? activeBuffer! : await decodeTrack(track.fileName)
-    // 切歌从头播；同曲再次点选也从头
+    loadedFileName = track.fileName
     startBuffer(buffer, 0)
     console.log('[bgm] 正在播放:', track.title, 'vol=', baseVolume)
   } catch (err) {
