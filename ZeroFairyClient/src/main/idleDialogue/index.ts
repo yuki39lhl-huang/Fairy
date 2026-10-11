@@ -16,41 +16,49 @@ const FALLBACK_LINES = [
   '如果您想小憩，请允许我挑选曲目。\n我会用轻音乐和白噪声，编制您的梦。'
 ]
 
-let lines: string[] = []
-let lastLine = ''
+interface IdleLine {
+  beats: string[]
+}
+
+let lines: IdleLine[] = []
+let deck: IdleLine[] = []
+let lastLine: IdleLine | null = null
 let timer: ReturnType<typeof setTimeout> | null = null
 let started = false
 let speaking = false
 let shouldDefer: () => boolean = () => false
 let inMutedCall: () => boolean = () => false
-let playInCall: ((spoken: string) => Promise<boolean>) | null = null
+let playInCall: ((beats: string[]) => Promise<boolean>) | null = null
 
-function parseIdleMarkdown(markdown: string): string[] {
-  const items: string[] = []
-  let current: string[] | null = null
+function closeBeat(line: string): string {
+  const text = line.trim()
+  if (!text) return ''
+  if (/[。！？…?!：:~～%」』]$/.test(text) || text.endsWith('——') || text.endsWith('—')) return text
+  return `${text}。`
+}
+
+function parseIdleMarkdown(markdown: string): IdleLine[] {
+  const items: IdleLine[] = []
+  let beats: string[] = []
   const flush = (): void => {
-    if (!current?.length) return
-    const text = current.join('\n').trim()
-    if (text) items.push(text)
-    current = null
+    if (!beats.length) return
+    items.push({ beats })
+    beats = []
   }
   for (const raw of markdown.split(/\r?\n/)) {
-    if (raw.startsWith('- ')) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) {
       flush()
-      current = [raw.slice(2).trim()]
       continue
     }
-    if (current && /^\s+\S/.test(raw)) {
-      current.push(raw.trim())
-      continue
-    }
-    if (raw.trim() === '') flush()
+    const beat = closeBeat(line)
+    if (beat) beats.push(beat)
   }
   flush()
   return items
 }
 
-function loadLines(): string[] {
+function loadLines(): IdleLine[] {
   const file = join(app.getAppPath(), 'docs', 'idle-dialogues', 'hdd-idle.md')
   try {
     const parsed = parseIdleMarkdown(readFileSync(file, 'utf8'))
@@ -61,27 +69,37 @@ function loadLines(): string[] {
   } catch (err) {
     console.warn('[idle] 读不到待机台词稿，改用内置短句:', err)
   }
-  return FALLBACK_LINES
+  return FALLBACK_LINES.map((text) => ({
+    beats: text
+      .split('\n')
+      .map((part) => closeBeat(part))
+      .filter(Boolean)
+  }))
 }
 
-function pickLine(): string {
-  const pool = lines.length > 1 ? lines.filter((line) => line !== lastLine) : lines
-  const next = pool[Math.floor(Math.random() * pool.length)] || FALLBACK_LINES[0]
+function reshuffle(): void {
+  const source = lines.slice()
+  for (let i = source.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1))
+    const swap = source[i]
+    source[i] = source[j]
+    source[j] = swap
+  }
+  if (source.length > 1 && source[source.length - 1] === lastLine) {
+    const j = Math.floor(Math.random() * (source.length - 1))
+    const swap = source[source.length - 1]
+    source[source.length - 1] = source[j]
+    source[j] = swap
+  }
+  deck = source
+}
+
+function pickLine(): IdleLine {
+  if (!deck.length) reshuffle()
+  const next = deck.pop()
+  if (!next) return lines[0]
   lastLine = next
   return next
-}
-
-function displayLine(full: string): string {
-  return full.split('\n')[0].trim()
-}
-
-function speechLine(full: string): string {
-  return full
-    .split('\n')
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join('。')
-    .replace(/。{2,}/g, '。')
 }
 
 function clearTimer(): void {
@@ -107,16 +125,15 @@ async function speakNext(): Promise<void> {
     return
   }
   speaking = true
-  const full = pickLine()
-  const spoken = speechLine(full)
+  const line = pickLine()
   try {
-    console.log('[idle] 通话待机台词:', displayLine(full))
-    if (playInCall) await playInCall(spoken)
+    console.log('[idle] 通话待机台词:', line.beats[0])
+    if (playInCall) await playInCall(line.beats)
   } catch (err) {
     console.warn('[idle] 待机台词播放失败:', err)
   } finally {
     speaking = false
-    if (inMutedCall()) arm(Math.max(8000, spoken.length * 280) + QUIET_MS)
+    if (inMutedCall()) arm(Math.max(8000, line.beats.join('').length * 280) + QUIET_MS)
   }
 }
 
@@ -138,7 +155,7 @@ export function setCallIdleEnabled(enabled: boolean): void {
 export function startIdleDialogues(
   defer: () => boolean,
   mutedCall: () => boolean,
-  playOnCall?: (spoken: string) => Promise<boolean>
+  playOnCall?: (beats: string[]) => Promise<boolean>
 ): void {
   shouldDefer = defer
   inMutedCall = mutedCall

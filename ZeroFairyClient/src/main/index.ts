@@ -293,21 +293,22 @@ function createWindow(): BrowserWindow {
     startIdleDialogues(
       () => chatBusy,
       () => Boolean(voiceCallWindow && !voiceCallWindow.isDestroyed() && voiceCallMuted),
-      async (spoken) => {
-        if (!voiceCallWindow || voiceCallWindow.isDestroyed() || !voiceCallMuted) return false
-        try {
-          const { audioBuffer } = await synthesizeSpeech(spoken)
-          if (!audioBuffer?.byteLength) return true
+      async (beats) => {
+        for (const beat of beats) {
           if (!voiceCallWindow || voiceCallWindow.isDestroyed() || !voiceCallMuted) return false
-          voiceCallWindow.webContents.send('ag-ui-event', {
-            type: 'ai:audio-ready',
-            payload: { audioData: audioBuffer }
-          })
-          return true
-        } catch (err) {
-          console.warn('[idle] 通话内待机台词合成失败:', err)
-          return true
+          try {
+            const { audioBuffer } = await synthesizeSpeech(beat)
+            if (!audioBuffer?.byteLength) continue
+            if (!voiceCallWindow || voiceCallWindow.isDestroyed() || !voiceCallMuted) return false
+            voiceCallWindow.webContents.send('ag-ui-event', {
+              type: 'ai:audio-ready',
+              payload: { audioData: audioBuffer }
+            })
+          } catch (err) {
+            console.warn('[idle] 通话内待机台词合成失败:', err)
+          }
         }
+        return true
       }
     )
     const greeting = '主人，我正处在空闲中。'
