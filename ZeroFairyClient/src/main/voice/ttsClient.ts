@@ -1,6 +1,6 @@
 // 业务侧统一入口：SpeakScript 编排 + 当前激活的 TTS Provider + Fairy 声线就绪检查
 
-import { toSpeakText, type SpeakScriptContext } from './speakScript'
+import { toSpeakText } from './speakScript'
 import { getActiveTtsProvider, setActiveTtsProvider as setActive } from './tts/registry'
 import type { TtsSynthesizeOptions, TtsSynthesizeResult } from './tts/types'
 import { ensureFairyVoice } from './voiceProfile/ensureFairyVoice'
@@ -27,12 +27,11 @@ export { ensureFairyVoice, getFairyVoiceStatus } from './voiceProfile/ensureFair
  */
 export async function synthesizeSpeech(
   text: string,
-  options: TtsOptions & { scene?: SpeakScriptContext['scene'] } = {}
+  options: TtsOptions = {}
 ): Promise<TtsResult> {
-  const { scene = 'generic', ...ttsOptions } = options
-  const spokenText = toSpeakText(text, { scene })
+  const spokenText = toSpeakText(text)
   if (!spokenText) {
-    throw new Error('TTS：编排后文本为空，已跳过合成')
+    return { audioBuffer: Buffer.alloc(0), spokenText: '', providerId: getActiveTtsProvider().id }
   }
 
   const provider = getActiveTtsProvider()
@@ -40,7 +39,7 @@ export async function synthesizeSpeech(
     await ensureFairyVoice(provider.id)
   }
 
-  const result = await provider.synthesize(spokenText, ttsOptions)
+  const result = await provider.synthesize(spokenText, options)
   return {
     audioBuffer: result.audioBuffer,
     spokenText: result.spokenText,

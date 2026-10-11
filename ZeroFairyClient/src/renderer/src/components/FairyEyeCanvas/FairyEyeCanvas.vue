@@ -6,7 +6,7 @@
 </template>
 
 <script setup lang="ts">
-import { getCurrentInstance, onUnmounted, ref, watch, type WatchStopHandle } from 'vue'
+import { getCurrentInstance, onBeforeUnmount, ref, watch, type WatchStopHandle } from 'vue'
 import * as PIXI from 'pixi.js'
 import { useVoiceCallStore } from '../../stores/voiceCallStore'
 import { IdleScanController } from '../../services/idleScanController'
@@ -40,6 +40,7 @@ const BREATH_PERIOD_MS = 2000
 const ROTATION_PER_MS = (Math.PI * 2) / 13000 // one revolution per 13 s
 const EYEWHITE_GAZE_OFFSET = 26
 const ASSET_VER = 'v4-static-bg1'
+const BACKGROUND_VIDEO = '/fairy/layers_v4/background.mp4'
 
 /** L1（最外软光环）按设计省略，不再加载。 */
 const LAYER_NAMES = [
@@ -91,6 +92,8 @@ function bindCanvas(el: Element | null): void {
 
 let app: PIXI.Application | null = null
 let background: PIXI.Sprite | null = null
+let backgroundVideo: HTMLVideoElement | null = null
+let backgroundVideoLoaded = false
 let eyeRoot: PIXI.Container | null = null
 let eyeWhiteRoot: PIXI.Container | null = null
 const layers: Partial<Record<LayerName, PIXI.Sprite>> = {}
@@ -206,21 +209,37 @@ async function mountEye(root: HTMLElement, view: HTMLCanvasElement): Promise<voi
     return
   }
 
-  const assetUrls = [
-    ...(props.hideBackground ? [] : [`/fairy/layers_v4/background.png?v=${ASSET_VER}`]),
-    ...LAYER_NAMES.map((name) => `/fairy/layers_v4/${name}.png?v=${ASSET_VER}`)
-  ]
+  const assetUrls = LAYER_NAMES.map((name) => `/fairy/layers_v4/${name}.png?v=${ASSET_VER}`)
   const assets = await PIXI.Assets.load(assetUrls)
+  let backgroundTexture: PIXI.Texture | null = null
+  if (!props.hideBackground) {
+    backgroundTexture = await PIXI.Assets.load<PIXI.Texture>({
+      src: BACKGROUND_VIDEO,
+      data: {
+        loop: true,
+        muted: true,
+        autoPlay: true,
+        playsinline: true
+      }
+    })
+    backgroundVideoLoaded = true
+  }
   if (!app || instance?.isUnmounted) {
+    releaseBackgroundVideo()
     app?.destroy({ removeView: false }, { children: true })
     app = null
     return
   }
 
-  if (!props.hideBackground) {
-    background = new PIXI.Sprite(assets[`/fairy/layers_v4/background.png?v=${ASSET_VER}`])
+  if (backgroundTexture) {
+    background = new PIXI.Sprite(backgroundTexture)
     background.anchor.set(0.5)
     app.stage.addChild(background)
+    const video = backgroundTexture.source.resource
+    if (video instanceof HTMLVideoElement) {
+      backgroundVideo = video
+      void video.play().catch(() => undefined)
+    }
   }
 
   eyeRoot = new PIXI.Container()
@@ -243,7 +262,7 @@ async function mountEye(root: HTMLElement, view: HTMLCanvasElement): Promise<voi
 
   idleScan = new IdleScanController(gaze, {
     idleDelayMs: 3000,
-    scanIntervalMs: 4000,
+    scanIntervalMs: 3000,
     rangeX: 0.92,
     rangeY: 0.58
   })
@@ -314,7 +333,23 @@ async function mountEye(root: HTMLElement, view: HTMLCanvasElement): Promise<voi
   })
 }
 
-onUnmounted(() => {
+function releaseBackgroundVideo(): void {
+  const video = backgroundVideo
+  backgroundVideo = null
+  background = null
+  if (video) {
+    video.pause()
+    for (const source of video.querySelectorAll('source')) source.remove()
+    video.src = ''
+    video.load()
+  }
+  if (!backgroundVideoLoaded) return
+  backgroundVideoLoaded = false
+  void PIXI.Assets.unload(BACKGROUND_VIDEO)
+}
+
+onBeforeUnmount(() => {
+  releaseBackgroundVideo()
   stopSpeakingWatch?.()
   stopEmotionWatch?.()
   if (emotionTimer !== null) window.clearTimeout(emotionTimer)
@@ -324,7 +359,6 @@ onUnmounted(() => {
   mouthSyncChannel?.close()
   app?.destroy({ removeView: true }, { children: true })
   app = null
-  background = null
   eyeRoot = null
   eyeWhiteRoot = null
 })

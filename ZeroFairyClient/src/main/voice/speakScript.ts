@@ -1,37 +1,20 @@
 // src/main/voice/speakScript.ts
 // 把 Fairy 展示文案编排成适合朗读的 SpeakScript（不影响聊天框原文）
 
-export interface SpeakScriptContext {
-  /** 场景：聊天句 / 提醒 / 空闲问候 —— 便于后续差异化规则 */
-  scene?: 'chat' | 'reminder' | 'idle' | 'generic'
-}
-
 /** 这些词保持英文原文，不改中文谐音，也不拆成字母 */
 const KEEP_AS_WRITTEN = new Set(['ai', 'fairy', 'random', 'play', 'randomplay'])
 
-/** 英文 / 缩写读法表（可继续扩充；查不到再走通用拉丁规则） */
+/** 英文 / 缩写读法表。查找时会先转小写，不必再写大写项。 */
 const LEXICON: Record<string, string> = {
   ok: '欧克',
-  OK: '欧克',
   hp: '体力',
-  HP: '体力',
   mp: '法力',
-  MP: '法力',
   cpu: 'C P U',
-  CPU: 'C P U',
   gpu: 'G P U',
-  GPU: 'G P U',
   api: 'A P I',
-  API: 'A P I',
   url: '链接',
-  URL: '链接',
-  http: '链接',
-  https: '链接',
-  www: '',
   tts: '语音合成',
-  TTS: '语音合成',
-  npc: 'N P C',
-  NPC: 'N P C'
+  npc: 'N P C'
 }
 
 const DIGIT_ZH = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九']
@@ -86,10 +69,32 @@ function applyLexicon(text: string): string {
   })
 }
 
-function normalizeSymbols(text: string): string {
+const DOMAIN_BODY =
+  '(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:com|cn|org|net|edu|gov|io|co|wiki|me|app|dev|ai|tv|cc|jp|kr|uk|de|fr|ru|info|xyz|top|site)'
+
+function looksLikeDomain(text: string): boolean {
+  return new RegExp(`^${DOMAIN_BODY}$`, 'i').test(text.trim())
+}
+
+/** 链接只留在屏幕上，朗读稿里整段拿掉，不读网址，也不读成「链接」。 */
+function stripLinks(text: string): string {
   let result = text
-  result = result.replace(/https?:\/\/\S+/gi, '链接')
-  result = result.replace(/\bwww\.\S+/gi, '链接')
+  result = result.replace(/\[([^\]]+)\]\((?:https?:\/\/|www\.)[^)\s]+\)/gi, (_m, label: string) => {
+    const name = label.trim()
+    if (!name || /^https?:\/\//i.test(name) || /^www\./i.test(name) || looksLikeDomain(name)) return ''
+    return name
+  })
+  result = result.replace(/https?:\/\/[^\s，。！？、；：)）」』\]]+/gi, '')
+  result = result.replace(/\bwww\.[^\s，。！？、；：)）」』\]]+/gi, '')
+  result = result.replace(
+    new RegExp(String.raw`\b${DOMAIN_BODY}(?:\/[^\s，。！？、；：)）」』\]]*)?`, 'gi'),
+    ''
+  )
+  return result
+}
+
+function normalizeSymbols(text: string): string {
+  let result = stripLinks(text)
   result = result.replace(/[（(][^）)]*[）)](?=[。！？…]|\s*$)/g, '')
   result = result.replace(/[-_*=~]{2,}/g, '，')
   result = result.replace(/[—–―−]+/g, '，')
@@ -127,7 +132,7 @@ function normalizeNumbersAndTime(text: string): string {
  * 展示文案 → 朗读稿。
  * 后续加厂家时仍应先走这一层，再交给具体 TTS Provider。
  */
-export function toSpeakText(raw: string, _ctx: SpeakScriptContext = {}): string {
+export function toSpeakText(raw: string): string {
   let result = (raw || '').replace(/\r\n/g, '\n').trim()
   if (!result) return ''
 
@@ -136,6 +141,9 @@ export function toSpeakText(raw: string, _ctx: SpeakScriptContext = {}): string 
   result = applyLexicon(result)
   result = normalizeNumbersAndTime(result)
   result = result.replace(/\s{2,}/g, ' ').trim()
+  result = result.replace(/\s+([。！？，、])/g, '$1')
+  result = result.replace(/([。！？])\s*[；;，,]+\s*/g, '$1')
+  result = result.replace(/\s*[；;]+\s*/g, '，')
   result = result.replace(/[，,]{2,}/g, '，')
   result = result.replace(/^，+|，+$/g, '').trim()
   return result

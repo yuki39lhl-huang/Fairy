@@ -16,22 +16,15 @@ let readyWaiters: Array<() => void> = []
 const BASE_H = 80
 const MARGIN = 10
 const FLOAT_W = 360
-const LEAVE_MS = 300
-
-export type FairyFloatSpeakMode =
-  /** ç­è¯­é³å°±ç»ªåå¼¹åºï¼éåå¯å¨é®åï¼é¿åæ å£°ç©ºçªï¼ */
-  | 'wait'
-  /** åå¼¹åºæå­ï¼è¯­é³åå°åæ­ï¼éåæéåç¹ï¼ */
-  | 'defer'
+/** 与浮窗收回动画对齐：先收回文字条，再缩徽章，窗口留到动画结束。 */
+const LEAVE_MS = 540
 
 export interface FairyFloatOptions {
   durationMs?: number
   speak?: boolean
   speakText?: string
-  /** é¢åæå¥½çé³é¢ï¼æåå°ç¹ç´æ¥æ­ */
+  /** 已经合成好的音频。有的话和文字一起交出，由浮窗在文字条滑到位时播放。 */
   audioBuffer?: Buffer | Uint8Array
-  speakMode?: FairyFloatSpeakMode
-  scene?: 'chat' | 'reminder' | 'idle' | 'generic'
 }
 
 function estimateWidth(text: string): number {
@@ -62,7 +55,8 @@ function ensureWindow(): BrowserWindow {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
-      zoomFactor: 1
+      zoomFactor: 1,
+      backgroundThrottling: false
     }
   })
 
@@ -170,31 +164,35 @@ export function onFairyFloatReady(): void {
   }
 }
 
-/**
- * å³ä¸è§å±ç¤ºæµ®çªã
- * - speakMode=waitï¼ç­ TTS åå¼¹åºï¼å¯å¨é®åï¼
- * - speakMode=deferï¼ååºå­ï¼è¯­é³åå°åæ­ï¼æéåç¹ï¼
- * - audioBufferï¼é¢åæç¼å­ï¼å°ç¹ç´æ¥åºå­+å£°
- */
+/** 右上角浮窗。文字先出现，语音能提前合成就一起带上，否则和开窗同时合成。 */
 export async function showFairyFloat(
   text: string,
   options: FairyFloatOptions | number = {}
 ): Promise<void> {
   const opts: FairyFloatOptions =
     typeof options === 'number'
-      ? { durationMs: options, speak: true, speakMode: 'wait' }
+      ? { durationMs: options, speak: true }
       : {
           durationMs: options.durationMs ?? 0,
           speak: options.speak !== false,
           speakText: options.speakText,
-          audioBuffer: options.audioBuffer,
-          speakMode: options.speakMode ?? 'wait',
-          scene: options.scene ?? 'generic'
+          audioBuffer: options.audioBuffer
         }
 
   const displayText = text
   const voiceText = (opts.speakText?.trim() || displayText).trim()
-  const speakMode: FairyFloatSpeakMode = opts.speakMode ?? 'wait'
+  const readyBuffer =
+    opts.speak && opts.audioBuffer && opts.audioBuffer.byteLength > 0 ? opts.audioBuffer : null
+  // 合成和开窗同时进行，文字条滑到位时语音尽量已经在手里。
+  const synthPromise =
+    opts.speak && !readyBuffer
+      ? synthesizeSpeech(voiceText)
+          .then((result) => result.audioBuffer)
+          .catch((err) => {
+            console.warn('[FairyFloat] TTS 失败，仅展示文字:', err)
+            return null
+          })
+      : null
 
   const win = ensureWindow()
   const width = estimateWidth(displayText)
@@ -211,46 +209,22 @@ export async function showFairyFloat(
   const fallbackHideMs = (spoken: string): number =>
     Math.max(8000, Math.ceil(spoken.length * 280))
 
-  // å·²æé¢åæï¼ç»é¢ä¸å£°é³ä¸èµ·åº
-  if (opts.speak && opts.audioBuffer && opts.audioBuffer.byteLength > 0) {
-    sendShow(win, displayText)
-    sendAudio(win, opts.audioBuffer)
-    scheduleHide(fallbackHideMs(voiceText))
-    return
-  }
-
-  if (opts.speak && speakMode === 'defer') {
-    sendShow(win, displayText)
-    scheduleHide(opts.durationMs > 0 ? opts.durationMs : fallbackHideMs(voiceText))
-    try {
-      const { audioBuffer } = await synthesizeSpeech(voiceText, { scene: opts.scene })
-      if (token !== speakToken || win.isDestroyed()) return
-      sendAudio(win, audioBuffer)
-      scheduleHide(fallbackHideMs(voiceText))
-    } catch (err) {
-      console.warn('[FairyFloat] å»¶å TTS å¤±è´¥ï¼ä»å±ç¤ºæå­:', err)
-    }
-    return
-  }
-
-  if (opts.speak) {
-    try {
-      const { audioBuffer } = await synthesizeSpeech(voiceText, { scene: opts.scene })
-      if (token !== speakToken || win.isDestroyed()) return
-      sendShow(win, displayText)
-      sendAudio(win, audioBuffer)
-      scheduleHide(fallbackHideMs(voiceText))
-    } catch (err) {
-      console.warn('[FairyFloat] TTS å¤±è´¥ï¼ä»å±ç¤ºæå­:', err)
-      if (token !== speakToken || win.isDestroyed()) return
-      sendShow(win, displayText)
-      scheduleHide(opts.durationMs > 0 ? opts.durationMs : 5500)
-    }
-    return
-  }
-
   sendShow(win, displayText)
-  scheduleHide(opts.durationMs > 0 ? opts.durationMs : 5500)
+
+  if (!opts.speak) {
+    scheduleHide(opts.durationMs > 0 ? opts.durationMs : 5500)
+    return
+  }
+
+  scheduleHide(fallbackHideMs(voiceText))
+  const buffer = readyBuffer ?? (await synthPromise)
+  if (token !== speakToken || win.isDestroyed()) return
+  if (!buffer || buffer.byteLength === 0) {
+    scheduleHide(opts.durationMs > 0 ? opts.durationMs : 5500)
+    return
+  }
+  sendAudio(win, buffer)
+  scheduleHide(fallbackHideMs(voiceText))
 }
 
 export function isFairyFloatShowing(): boolean {

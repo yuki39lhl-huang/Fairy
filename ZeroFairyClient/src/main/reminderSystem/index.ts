@@ -126,10 +126,15 @@ async function prefetchAudio(id: string): Promise<void> {
   prefetchInFlight.add(id)
   try {
     const speakText = buildSpeakText(item)
-    const { audioBuffer } = await synthesizeSpeech(speakText, { scene: 'reminder' })
+    const { audioBuffer } = await synthesizeSpeech(speakText)
     // 文案若已改过，丢掉旧合成，避免错误提醒被读出来
     const latest = reminders.find((r) => r.id === id)
-    if (latest && latest.status === 'pending' && buildSpeakText(latest) === speakText) {
+    if (
+      audioBuffer.byteLength > 0 &&
+      latest &&
+      latest.status === 'pending' &&
+      buildSpeakText(latest) === speakText
+    ) {
       audioCache.set(id, audioBuffer)
       console.log('[Reminder] 语音预合成完成:', id)
     }
@@ -175,10 +180,7 @@ function fireReminder(id: string): void {
     void showFairyFloat(content, {
       speak: true,
       speakText,
-      scene: 'reminder',
-      // 有缓存：准点出字+声；无缓存：先出字，语音后到再播（不拖画面）
-      audioBuffer: cached,
-      speakMode: cached ? 'wait' : 'defer'
+      audioBuffer: cached
     })
   } catch (err) {
     console.warn('[Reminder] 浮窗提示失败:', err)

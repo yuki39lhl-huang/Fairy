@@ -121,13 +121,14 @@ async function synthesizeRaw(apiKey: string, text: string, voiceId: string): Pro
       output_format: 'hex',
       voice_setting: {
         voice_id: voiceId,
-        speed: 1,
+        // 略慢于 1，辅音和字头更站得住，不会拖成慢放
+        speed: 0.92,
         vol: 1,
         pitch: 0
       },
       audio_setting: {
-        sample_rate: 32000,
-        bitrate: 128000,
+        sample_rate: 44100,
+        bitrate: 256000,
         format: 'mp3',
         channel: 1
       }

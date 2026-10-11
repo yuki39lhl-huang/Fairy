@@ -27,7 +27,7 @@ export class IdleScanController {
   constructor(focusController: FocusControllerLike, options: IdleScanOptions = {}) {
     this.focusController = focusController
     this.idleDelayMs = options.idleDelayMs ?? 3000
-    this.scanIntervalMs = options.scanIntervalMs ?? 4000
+    this.scanIntervalMs = options.scanIntervalMs ?? 3000
     this.rangeX = options.rangeX ?? 0.6
     this.rangeY = options.rangeY ?? 0.3
   }

@@ -1,19 +1,71 @@
-<!-- Fairy 桌面右上角浮窗：先果冻弹出徽章，再向左推出文字条 -->
+<!-- Fairy 桌面右上角浮窗：徽章先弹出，文字条再从徽章后面滑出 -->
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { Howler } from 'howler'
 import { playReplyAudio } from '../services/audioPlayer'
-import FairyEyeCanvas from '../components/FairyEyeCanvas/FairyEyeCanvas.vue'
+import badge2x from '../assets/float/fairy-badge-2x.png'
+import badge3x from '../assets/float/fairy-badge-3x.png'
 
 const IDLE_TEXT = '主人，我正处在空闲中。'
+
+/** 与下面 CSS 的时长保持一致：徽章落定后，文字条从徽章里滑出。 */
+const BAR_DELAY_MS = 280
+const BAR_MS = 360
+const SPEAK_AT_MS = BAR_DELAY_MS + BAR_MS
+/** 文字条收回后徽章再缩回去。 */
+const LEAVE_MS = 520
 
 const visible = ref(false)
 const text = ref(IDLE_TEXT)
 const motion = ref<'in' | 'out' | ''>('')
+const dpr = ref(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)
 let cleanup: (() => void) | undefined
 let showSeq = 0
 let hideTimer: ReturnType<typeof setTimeout> | null = null
+let speakTimer: ReturnType<typeof setTimeout> | null = null
+let shownAt = 0
+let pendingAudio: Uint8Array | null = null
 
-const LEAVE_MS = 560
+const badgeUrl = computed(() => (dpr.value >= 2.5 ? badge3x : badge2x))
+const badgeSrcset = `${badge2x} 2x, ${badge3x} 3x`
+
+function warmVoice(): void {
+  const ctx = Howler.ctx
+  if (ctx && ctx.state !== 'running') void ctx.resume()
+}
+
+function clearSpeech(): void {
+  if (speakTimer) {
+    clearTimeout(speakTimer)
+    speakTimer = null
+  }
+  pendingAudio = null
+}
+
+function deliverSpeech(): void {
+  speakTimer = null
+  const data = pendingAudio
+  pendingAudio = null
+  if (!data || motion.value !== 'in') return
+  warmVoice()
+  playReplyAudio(data, () => {
+    void window.api.notifyFairyFloatSpeechEnded()
+  })
+}
+
+function scheduleSpeech(): void {
+  if (!pendingAudio || motion.value !== 'in') return
+  if (speakTimer) {
+    clearTimeout(speakTimer)
+    speakTimer = null
+  }
+  const wait = Math.max(0, SPEAK_AT_MS - (performance.now() - shownAt))
+  if (wait === 0) {
+    deliverSpeech()
+    return
+  }
+  speakTimer = setTimeout(deliverSpeech, wait)
+}
 
 async function show(next: string): Promise<void> {
   const seq = ++showSeq
@@ -21,6 +73,7 @@ async function show(next: string): Promise<void> {
     clearTimeout(hideTimer)
     hideTimer = null
   }
+  clearSpeech()
   text.value = (next || IDLE_TEXT).trim()
   motion.value = ''
   visible.value = false
@@ -29,11 +82,14 @@ async function show(next: string): Promise<void> {
   visible.value = true
   await nextTick()
   if (seq !== showSeq) return
+  shownAt = performance.now()
   motion.value = 'in'
+  scheduleSpeech()
 }
 
 function hide(): void {
   const seq = ++showSeq
+  clearSpeech()
   if (!visible.value) return
   motion.value = 'out'
   if (hideTimer) clearTimeout(hideTimer)
@@ -46,12 +102,16 @@ function hide(): void {
 }
 
 function playAudio(audioData: Uint8Array): void {
-  playReplyAudio(audioData, () => {
-    void window.api.notifyFairyFloatSpeechEnded()
-  })
+  if (motion.value === 'out') return
+  pendingAudio = audioData
+  scheduleSpeech()
 }
 
 onMounted(() => {
+  dpr.value = window.devicePixelRatio || 1
+  Howler.autoSuspend = false
+  if (!Howler.ctx) Howler.volume(1)
+  warmVoice()
   const offShow = window.api.onFairyFloatShow((payload) => {
     void show(payload?.text ?? '')
   })
@@ -69,6 +129,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (hideTimer) clearTimeout(hideTimer)
+  clearSpeech()
   cleanup?.()
 })
 </script>
@@ -76,15 +137,24 @@ onUnmounted(() => {
 <template>
   <div class="stage">
     <div v-if="visible" class="bubble" :class="motion ? `play-${motion}` : ''" role="status">
+      <div class="track">
         <div class="bar">
           <div class="bar-mesh" aria-hidden="true" />
           <p class="text">{{ text }}</p>
         </div>
-        <div class="anchor" aria-hidden="true">
-          <div class="badge">
-            <FairyEyeCanvas hide-background :eye-fit="1.28" />
-          </div>
-        </div>
+      </div>
+      <div class="anchor" aria-hidden="true">
+        <img
+          class="badge"
+          :src="badgeUrl"
+          :srcset="badgeSrcset"
+          sizes="64px"
+          width="64"
+          height="58"
+          alt=""
+          draggable="false"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -117,15 +187,20 @@ body,
   height: 64px;
   transform: translate3d(0, -50%, 0);
   pointer-events: auto;
-  will-change: transform;
 }
 
-/* 文字条：左圆右切，嵌进圆形徽章 */
+/* 裁切槽贴在徽章左侧，文字条只从这里滑出来 */
+.track {
+  overflow: hidden;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  margin-right: -30px;
+}
+
 .bar {
   position: relative;
-  z-index: 1;
   height: 44px;
-  margin-right: -30px;
   padding: 0 42px 0 18px;
   display: flex;
   align-items: center;
@@ -137,7 +212,8 @@ body,
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
     inset 0 -2px 3px rgba(0, 0, 0, 0.4);
-  transform-origin: right center;
+  transform: translate3d(100%, 0, 0);
+  will-change: transform;
 }
 
 .bar::after {
@@ -202,43 +278,36 @@ body,
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  overflow: visible;
 }
 
 .badge {
+  display: block;
   width: 64px;
   height: 58px;
+  object-fit: contain;
+  object-position: center;
   pointer-events: none;
   user-select: none;
+  background: transparent;
+  transform: scale(0.15);
   transform-origin: center center;
-}
-
-.bubble:not(.play-in):not(.play-out) .badge {
-  transform: scale(0.2);
-}
-
-.bubble:not(.play-in):not(.play-out) .bar {
-  transform: translate3d(100%, 0, 0);
-  opacity: 0;
+  will-change: transform;
 }
 
 .play-in .badge {
-  animation: jelly-in 0.36s cubic-bezier(0.22, 1.4, 0.36, 1) both;
+  animation: jelly-in 0.34s cubic-bezier(0.22, 1.4, 0.36, 1) both;
 }
 
 .play-in .bar {
-  animation: bar-out 0.4s cubic-bezier(0.16, 1, 0.3, 1) 0.32s both;
+  animation: bar-out 0.36s cubic-bezier(0.16, 1, 0.3, 1) 0.28s both;
 }
 
 .play-out .bar {
-  transform: none;
-  opacity: 1;
-  animation: bar-out 0.26s cubic-bezier(0.4, 0, 1, 1) reverse both;
+  animation: bar-back 0.28s cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
 .play-out .badge {
-  transform: none;
-  animation: jelly-out 0.28s cubic-bezier(0.4, 0, 0.7, 1.3) 0.22s both;
+  animation: jelly-out 0.26s cubic-bezier(0.4, 0, 0.2, 1) 0.22s both;
 }
 
 @keyframes jelly-in {
@@ -261,7 +330,7 @@ body,
     transform: scale(1);
   }
   35% {
-    transform: scale(1.12, 0.86);
+    transform: scale(1.08, 0.9);
   }
   100% {
     transform: scale(0.12);
@@ -271,11 +340,18 @@ body,
 @keyframes bar-out {
   from {
     transform: translate3d(100%, 0, 0);
-    opacity: 0;
   }
   to {
     transform: translate3d(0, 0, 0);
-    opacity: 1;
+  }
+}
+
+@keyframes bar-back {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(100%, 0, 0);
   }
 }
 </style>

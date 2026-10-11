@@ -116,6 +116,9 @@ let speechGeneration = 0
 let activeChatSession = ''
 let activeTtsQueue: { cancel: () => void } | null = null
 
+/** 这一轮所在的会话已被用户删掉，收尾时不再写回历史。 */
+let discardedChatSession = ''
+
 function beginSpeechTurn(): number {
   speechGeneration += 1
   const gen = speechGeneration
@@ -125,6 +128,14 @@ function beginSpeechTurn(): number {
   agentEventBus.emit('ai:audio-reset', { generation: gen })
   console.log('[voice] 新语音回合 generation=', gen)
   return gen
+}
+
+/** 删掉的正是正在合成或播放的会话时，作废这一轮语音。 */
+function stopSpeechIfDeletingSession(sessionId: string): void {
+  if (!sessionId || sessionId !== activeChatSession) return
+  discardedChatSession = sessionId
+  const gen = beginSpeechTurn()
+  console.log('[voice] 当前会话已删除，停止合成和播放 generation=', gen)
 }
 
 function isSpeechCurrent(generation: number): boolean {
@@ -140,8 +151,10 @@ function finalizeAssistantTurn(
 ): void {
   agentEventBus.emit('ai:done', {})
   const session = activeChatSession || new Date().toDateString()
-  saveDailogHistory(session, userText, fullReply)
-  maybeExtractMemory(userText, fullReply)
+  if (session !== discardedChatSession) {
+    saveDailogHistory(session, userText, fullReply)
+    maybeExtractMemory(userText, fullReply)
+  }
 
   if (!isSpeechCurrent(generation)) {
     console.log('[voice] 回合已过期，跳过收尾 TTS generation=', generation)
@@ -171,6 +184,7 @@ function finalizeAssistantTurn(
 }
 
 async function sendSynthesizedAudio(audioBuffer: Buffer, generation: number): Promise<void> {
+  if (!audioBuffer?.byteLength) return
   if (!isSpeechCurrent(generation)) return
 
   if (voiceCallWindow && !voiceCallWindow.isDestroyed()) {
@@ -282,7 +296,8 @@ function createWindow(): BrowserWindow {
       async (spoken) => {
         if (!voiceCallWindow || voiceCallWindow.isDestroyed() || !voiceCallMuted) return false
         try {
-          const { audioBuffer } = await synthesizeSpeech(spoken, { scene: 'idle' })
+          const { audioBuffer } = await synthesizeSpeech(spoken)
+          if (!audioBuffer?.byteLength) return true
           if (!voiceCallWindow || voiceCallWindow.isDestroyed() || !voiceCallMuted) return false
           voiceCallWindow.webContents.send('ag-ui-event', {
             type: 'ai:audio-ready',
@@ -295,12 +310,18 @@ function createWindow(): BrowserWindow {
         }
       }
     )
+    const greeting = '主人，我正处在空闲中。'
+    const greetingAudio = synthesizeSpeech(greeting).catch((err) => {
+      console.warn('[FairyFloat] 问候语音提前合成失败:', err)
+      return null
+    })
     setTimeout(() => {
-      void showFairyFloat('主人，我正处在空闲中。', {
-        speak: true,
-        speakMode: 'wait',
-        scene: 'idle'
-      })
+      void greetingAudio.then((result) =>
+        showFairyFloat(greeting, {
+          speak: true,
+          audioBuffer: result?.audioBuffer
+        })
+      )
     }, 1800)
   })
 
@@ -414,6 +435,7 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('chat:delete-session', (_event, sessionId: string) => {
     if (!sessionId) return false
+    stopSpeechIfDeletingSession(sessionId)
     chatHistoryDb.deleteSession(sessionId)
     return true
   })

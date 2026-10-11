@@ -110,9 +110,13 @@ function handleKeydown(e: KeyboardEvent) {
   }
 }
 
-watch(callState, (state) => {
-  window.api.setVoiceCallMuted(state === 'muted')
-})
+watch(
+  callState,
+  (state) => {
+    window.api.setVoiceCallMuted(state === 'muted')
+  },
+  { immediate: true }
+)
 
 watch(
   () => voiceCallStore.isSpeaking,
@@ -129,7 +133,6 @@ onMounted(async () => {
   unsubWindowState = window.api.onVoiceCallWindowState((state) => {
     isMaximized.value = state.maximized
   })
-  startListening()
 })
 
 onUnmounted(() => {
@@ -236,15 +239,15 @@ onUnmounted(() => {
 .control-btn {
   width: 32px;
   height: 32px;
-  border-radius: 8px;
-  border: 1px solid rgba(125, 211, 252, 0.22);
-  background: rgba(4, 20, 40, 0.45);
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   color: rgba(186, 230, 253, 0.75);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  backdrop-filter: blur(8px);
 }
 
 .control-btn.close:hover {
@@ -326,35 +329,14 @@ onUnmounted(() => {
   width: 44px;
   height: 44px;
   padding: 0;
-  border-radius: 50%;
-  border: 1px solid rgba(125, 211, 252, 0.4);
-  background: rgba(4, 24, 48, 0.42);
-  box-shadow: 0 0 12px rgba(34, 211, 238, 0.12);
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  backdrop-filter: blur(8px);
-  transition:
-    border-color 0.2s ease,
-    box-shadow 0.2s ease,
-    background 0.2s ease;
-}
-
-.mute-btn:hover {
-  border-color: rgba(165, 243, 252, 0.7);
-  box-shadow: 0 0 14px rgba(34, 211, 238, 0.22);
-}
-
-.mute-btn.live {
-  border-color: rgba(34, 211, 238, 0.55);
-  box-shadow: 0 0 16px rgba(34, 211, 238, 0.28);
-}
-
-.mute-btn.muted {
-  border-color: rgba(248, 113, 113, 0.45);
-  background: rgba(40, 10, 16, 0.4);
-  box-shadow: 0 0 12px rgba(248, 113, 113, 0.16);
 }
 
 .mute-icon {
