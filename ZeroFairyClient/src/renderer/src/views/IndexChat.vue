@@ -6,6 +6,14 @@ import { useLlmStore } from '../stores/llmStore'
 import { startRecording, stopRecording } from '../services/micRecorder'
 import fairyMark from '../assets/fairy-mark.png'
 import FairyEyeCanvas from '../components/FairyEyeCanvas/FairyEyeCanvas.vue'
+import { playKeywordEffect } from '../services/keywordFxPlayer'
+
+const KEYWORDS = ['mj', '蜘蛛侠', '小蜘蛛'] as const
+
+function matchKeyword(text: string): string | undefined {
+  const t = text.trim().toLowerCase()
+  return KEYWORDS.find((k) => t === k || t.endsWith(k))
+}
 
 const chatStore = useChatStore()
 const llmStore = useLlmStore()
@@ -55,6 +63,7 @@ watch(
 async function sendMessage(): Promise<void> {
   const text = inputText.value.trim()
   if (!text || llmStore.isGenerating) return
+  const hit = matchKeyword(text)
 
   inputText.value = ''
   chatStore.armStream()
@@ -66,6 +75,8 @@ async function sendMessage(): Promise<void> {
     role: msg.role,
     content: msg.content
   }))
+
+  if (hit) playKeywordEffect()
 
   try {
     await window.api.sendMessage(text, history, chatStore.sessionId)

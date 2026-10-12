@@ -8,6 +8,7 @@ import { useBgmStore } from '../../stores/bgmStore'
 import { onBgmSpectrum } from '../../services/bgmPlayer'
 import Config from '../../views/Config.vue'
 import ModeSwitch from './ModeSwitch.vue'
+import { bindKeywordFxHost } from '../../services/keywordFxPlayer'
 
 const route = useRoute()
 const router = useRouter()
@@ -43,6 +44,7 @@ const historyMenu = ref<{ session: string; x: number; y: number } | null>(null)
 const renamingSession = ref('')
 const renameDraft = ref('')
 const historyListEl = ref<HTMLElement | null>(null)
+const fxHost = ref<HTMLElement | null>(null)
 const historyFit = ref(8)
 const HISTORY_ROW = 32
 let historyObserver: ResizeObserver | null = null
@@ -286,11 +288,14 @@ onMounted(async () => {
   if (historyListEl.value) historyObserver.observe(historyListEl.value)
 })
 
+watch(fxHost, (el) => bindKeywordFxHost(el), { immediate: true })
+
 function onSessionsChanged(): void {
   void refreshSessions()
 }
 
 onUnmounted(() => {
+  bindKeywordFxHost(null)
   unsubProfile?.()
   unsubSpectrum?.()
   historyObserver?.disconnect()
@@ -861,6 +866,8 @@ function closeWindow(): void {
         </div>
       </div>
     </aside>
+
+    <div ref="fxHost" class="keyword-fx" aria-hidden="true" />
 
     <div class="winbar">
         <div class="win-drag" />
@@ -1500,6 +1507,17 @@ function closeWindow(): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.keyword-fx {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: min(42vh, 320px);
+  pointer-events: none;
+  z-index: 50;
+  overflow: hidden;
 }
 
 .winbar {

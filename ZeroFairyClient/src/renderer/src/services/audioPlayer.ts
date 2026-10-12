@@ -11,10 +11,22 @@ let fairyVoiceVolume = 1
 
 // 不管这段代码实际跑在哪个窗口，只管往外广播，谁关心谁自己订阅
 const mouthSyncChannel = new BroadcastChannel('fairy-mouth-sync')
+const voiceVolumeChannel = new BroadcastChannel('fairy-voice-volume')
 
-export function setFairyVoiceVolume(v: number): void {
+voiceVolumeChannel.onmessage = (event: MessageEvent) => {
+  if (typeof event.data !== 'number') return
+  applyFairyVoiceVolume(event.data)
+}
+
+function applyFairyVoiceVolume(v: number): void {
   fairyVoiceVolume = Math.min(1, Math.max(0, v))
   if (currentSound) currentSound.volume(fairyVoiceVolume)
+}
+
+/** 主窗口改滑条时广播；通话窗等其它窗口会跟着改。 */
+export function setFairyVoiceVolume(v: number): void {
+  applyFairyVoiceVolume(v)
+  voiceVolumeChannel.postMessage(fairyVoiceVolume)
 }
 
 function ensureAnalyser(): AnalyserNode {

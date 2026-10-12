@@ -6,7 +6,7 @@ import { useRouter } from 'vue-router'
 import { useChatStore } from './stores/chatStore'
 import { useLlmStore } from './stores/llmStore'
 import { useVoiceCallStore } from './stores/voiceCallStore'
-import { playReplyAudio, stopReplyAudio } from './services/audioPlayer'
+import { playReplyAudio, setFairyVoiceVolume, stopReplyAudio } from './services/audioPlayer'
 
 const router = useRouter()
 const chatStore = useChatStore()
@@ -44,6 +44,11 @@ function drainAudioQueue(): void {
 
 // 全局监听 AG-UI 事件总线（只注册一次，放在根组件）
 onMounted(() => {
+  void window.api
+    .getBgmSettings()
+    .then((settings) => setFairyVoiceVolume(settings.fairyVoiceVolume))
+    .catch((err) => console.warn('[App] 读取 Fairy 语音音量失败:', err))
+
   unsubNavigate = window.api.onNavigate((path) => {
     void router.push(path)
   })

@@ -26,6 +26,9 @@ Thumbs.db
 
 # large / local media (keep code + app public assets)
 mp3/
+# mj 源仓仅本地参考；运行素材在 ZeroFairyClient/src/renderer/public/mj
+/mj/
+Grok Bot.lnk
 common/*.mp4
 common/*.aac
 common/*.zip
