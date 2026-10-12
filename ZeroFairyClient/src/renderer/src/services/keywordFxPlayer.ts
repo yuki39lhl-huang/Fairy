@@ -1,4 +1,4 @@
-// 聊天关键词彩蛋：在 Fairy 顶栏播蜘蛛侠帧动画（素材来自项目 mj/）
+// 聊天关键词彩蛋：在 Fairy 顶栏播蜘蛛侠帧动画（素材在 public/mj）
 import { Howl } from 'howler'
 
 interface KeywordEffect {
