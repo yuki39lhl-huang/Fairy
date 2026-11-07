@@ -48,21 +48,11 @@ function applyLexicon(text: string): string {
   return text.replace(/\b[A-Za-z][A-Za-z0-9+._-]{0,31}\b/g, (word) => {
     const lower = word.toLowerCase()
     if (KEEP_AS_WRITTEN.has(lower)) return word
-    if (Object.prototype.hasOwnProperty.call(LEXICON, word)) {
-      return LEXICON[word]
-    }
     if (Object.prototype.hasOwnProperty.call(LEXICON, lower)) {
       return LEXICON[lower]
     }
-    // 纯大写缩写：逐字母
+    // 纯大写缩写仍逐字母，例如 FGO、CPU；普通单词整词交给语音，按英文来读
     if (/^[A-Z]{2,6}$/.test(word)) {
-      return [...word].join(' ')
-    }
-    // 普通英文词：空格隔开字母，减轻「粘成乱音」；短词保留尝试整词
-    if (word.length <= 4 && /^[A-Za-z]+$/.test(word)) {
-      return word
-    }
-    if (/^[A-Za-z]+$/.test(word) && word.length > 4) {
       return [...word].join(' ')
     }
     return word

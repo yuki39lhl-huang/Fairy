@@ -1,6 +1,6 @@
 <!-- Main chat: clean agent conversation surface (no decorative background). -->
 <script setup lang="ts">
-import { ref, nextTick, computed, watch, inject, type Ref } from 'vue'
+import { ref, nextTick, computed, watch, inject, onMounted, onUnmounted, type Ref } from 'vue'
 import { useChatStore } from '../stores/chatStore'
 import { useLlmStore } from '../stores/llmStore'
 import { startRecording, stopRecording } from '../services/micRecorder'
@@ -41,6 +41,38 @@ const displayMessages = computed(() => {
 })
 
 const isEmpty = computed(() => displayMessages.value.length === 0)
+const ownerName = ref('主人')
+const now = ref(new Date())
+let greetingClock: number | null = null
+let unsubProfile: (() => void) | null = null
+
+function applyOwnerName(name: string | undefined): void {
+  ownerName.value = name?.trim() || '主人'
+}
+
+/** 空会话问候随钟点变，深夜用问句，和 Claude 同一套时段 */
+const greeting = computed(() => {
+  const hour = now.value.getHours()
+  const name = ownerName.value
+  if (hour >= 23 || hour < 5) return `还没睡，${name}？`
+  if (hour < 11) return `早上好，${name}`
+  if (hour < 14) return `中午好，${name}`
+  if (hour < 18) return `下午好，${name}`
+  return `晚上好，${name}`
+})
+
+onMounted(() => {
+  greetingClock = window.setInterval(() => {
+    now.value = new Date()
+  }, 60_000)
+  void window.api.getUserProfile().then((profile) => applyOwnerName(profile.displayName))
+  unsubProfile = window.api.onUserProfileChanged((profile) => applyOwnerName(profile.displayName))
+})
+
+onUnmounted(() => {
+  if (greetingClock != null) window.clearInterval(greetingClock)
+  unsubProfile?.()
+})
 
 /** 只有当前这条会话在生成时才锁输入；别的会话照常可以打字 */
 const sessionBusy = computed(
@@ -242,12 +274,12 @@ function formatMessageHtml(raw: string): string {
       </div>
 
       <div v-else-if="isEmpty" class="hero">
-        <div class="hero-row">
-          <div class="hero-eye" aria-hidden="true">
+        <h1 class="greeting">
+          <span class="greeting-eye" aria-hidden="true">
             <FairyEyeCanvas hide-background :eye-fit="0.92" />
-          </div>
-          <h1 class="hero-title">今天想聊点什么？</h1>
-        </div>
+          </span>
+          <span>{{ greeting }}</span>
+        </h1>
       </div>
 
       <div v-else class="thread-inner">
@@ -367,9 +399,22 @@ function formatMessageHtml(raw: string): string {
   flex-shrink: 0;
 }
 
-.hero-eye {
-  width: 128px;
-  height: 128px;
+.greeting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: 0;
+  font-family: Palatino, 'Palatino Linotype', 'Songti SC', 'Noto Serif SC', serif;
+  font-size: 34px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: #f4f1ea;
+}
+
+.greeting-eye {
+  width: 72px;
+  height: 72px;
   flex-shrink: 0;
 }
 
