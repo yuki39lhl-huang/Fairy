@@ -6,7 +6,14 @@
 </template>
 
 <script setup lang="ts">
-import { getCurrentInstance, onBeforeUnmount, ref, watch, type WatchStopHandle } from 'vue'
+import {
+  getCurrentInstance,
+  onBeforeUnmount,
+  ref,
+  watch,
+  type ComponentPublicInstance,
+  type WatchStopHandle
+} from 'vue'
 import * as PIXI from 'pixi.js'
 import { useVoiceCallStore } from '../../stores/voiceCallStore'
 import { IdleScanController } from '../../services/idleScanController'
@@ -80,14 +87,14 @@ function scheduleMount(): void {
   })
 }
 
-function bindContainer(el: Element | null): void {
+function bindContainer(el: Element | ComponentPublicInstance | null): void {
   container.value = el instanceof HTMLElement ? el : null
-  if (el) scheduleMount()
+  if (container.value) scheduleMount()
 }
 
-function bindCanvas(el: Element | null): void {
+function bindCanvas(el: Element | ComponentPublicInstance | null): void {
   canvas.value = el instanceof HTMLCanvasElement ? el : null
-  if (el) scheduleMount()
+  if (canvas.value) scheduleMount()
 }
 
 let app: PIXI.Application | null = null

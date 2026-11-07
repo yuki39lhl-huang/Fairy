@@ -10,7 +10,7 @@ import { createLLMAdapter } from './llmAdapter'
 import { buildPromptMessages } from './llmAdapter/promptCore'
 import { ChatMessage, ToolCall } from './llmAdapter/baseModel'
 import { getDb } from './db'
-import { retrieveMemories, saveDailogHistory, maybeExtractMemory } from './memorySystem'
+import { retrieveMemories, saveUserTurn, saveAssistantTurn, maybeExtractMemory } from './memorySystem'
 import { allTools, getToolByName } from './toolSystem'
 import { toolsToOpenAIFormat } from './llmAdapter/functionCall'
 import { initAccountingTable } from './db/accounting'
@@ -24,6 +24,7 @@ import {
 import { getActiveTtsProvider } from './voice/tts/registry'
 import { transcribeSpeech } from './voice/whisperClient'
 import { createSentenceSegmenter } from './voice/sentenceSegmenter'
+import { toSpeakText } from './voice/speakScript'
 import {
   hydrateReminders,
   listReminders,
@@ -109,6 +110,8 @@ async function saveMicDebugFile(audioBuffer: Buffer): Promise<string> {
 let voiceCallWindow: BrowserWindow | null = null
 let voiceCallMuted = false
 let chatBusy = false
+/** 一轮提问里最多连续调几次工具，之后强制自然语言收尾 */
+const MAX_TOOL_ROUNDS = 4
 
 /** 每轮用户提问递增；过期的合成结果一律丢弃，避免「新问题播旧语音」 */
 let speechGeneration = 0
@@ -116,7 +119,7 @@ let speechGeneration = 0
 let activeChatSession = ''
 let activeTtsQueue: { cancel: () => void } | null = null
 
-/** 这一轮所在的会话已被用户删掉，收尾时不再写回历史。 */
+/** 这一轮所在的会话已被用户删掉或主动放弃，收尾时不再写回历史 / 不再推 UI。 */
 let discardedChatSession = ''
 
 function beginSpeechTurn(): number {
@@ -130,12 +133,31 @@ function beginSpeechTurn(): number {
   return gen
 }
 
-/** 删掉的正是正在合成或播放的会话时，作废这一轮语音。 */
-function stopSpeechIfDeletingSession(sessionId: string): void {
+function isTurnDiscarded(turnSessionId: string): boolean {
+  return Boolean(turnSessionId) && discardedChatSession === turnSessionId
+}
+
+/** 向渲染端推 AI 事件；已放弃的回合只静默，避免继续锁输入或写进新会话 */
+function emitAi(
+  type: Parameters<typeof agentEventBus.emit>[0],
+  turnSessionId: string,
+  payload: Record<string, unknown> = {}
+): void {
+  if (isTurnDiscarded(turnSessionId) && type !== 'ai:audio-reset') return
+  agentEventBus.emit(type, { ...payload, sessionId: turnSessionId })
+}
+
+/** 删掉 / 放弃的正是正在生成的会话时，作废这一轮。 */
+function discardChatTurn(sessionId: string): void {
   if (!sessionId || sessionId !== activeChatSession) return
   discardedChatSession = sessionId
   const gen = beginSpeechTurn()
-  console.log('[voice] 当前会话已删除，停止合成和播放 generation=', gen)
+  console.log('[chat] 回合已放弃，停止合成和播放 generation=', gen, 'session=', sessionId)
+}
+
+/** 删掉的正是正在合成或播放的会话时，作废这一轮语音。 */
+function stopSpeechIfDeletingSession(sessionId: string): void {
+  discardChatTurn(sessionId)
 }
 
 function isSpeechCurrent(generation: number): boolean {
@@ -147,12 +169,12 @@ function finalizeAssistantTurn(
   fullReply: string,
   segmenter: ReturnType<typeof createSentenceSegmenter> | null,
   ttsQueue: ReturnType<typeof createStreamingTtsQueue> | null,
-  generation: number
+  generation: number,
+  turnSessionId: string
 ): void {
-  agentEventBus.emit('ai:done', {})
-  const session = activeChatSession || new Date().toDateString()
-  if (session !== discardedChatSession) {
-    saveDailogHistory(session, userText, fullReply)
+  emitAi('ai:done', turnSessionId)
+  if (!isTurnDiscarded(turnSessionId)) {
+    saveAssistantTurn(turnSessionId || new Date().toDateString(), fullReply)
     maybeExtractMemory(userText, fullReply)
   }
 
@@ -248,7 +270,7 @@ function createStreamingTtsQueue(generation: number): {
 
   function pushSentence(sentence: string): void {
     if (cancelled || !isSpeechCurrent(generation)) return
-    if (!sentence.trim()) return
+    if (!toSpeakText(sentence)) return
     queue.push(sentence)
     processNext()
   }
@@ -465,22 +487,33 @@ app.whenReady().then(() => {
     return storeManager.addCodeProjectDir(result.filePaths[0])
   })
 
+  ipcMain.handle('chat:abandon-turn', (_event, sessionId: string) => {
+    if (!sessionId || typeof sessionId !== 'string') return false
+    discardChatTurn(sessionId.trim())
+    return true
+  })
+
   ipcMain.handle(
     'send-message',
     async (_event, text: string, history: ChatMessage[], sessionId?: string) => {
       noteIdleActivity()
       chatBusy = true
-      activeChatSession =
+      const turnSessionId =
         typeof sessionId === 'string' && sessionId.trim()
           ? sessionId.trim()
           : new Date().toDateString()
+      activeChatSession = turnSessionId
+      // 新提问覆盖旧回合：若上一轮被放弃的是别的会话，保留 discarded 标记给旧回合闭包检查
+      if (discardedChatSession === turnSessionId) discardedChatSession = ''
+      saveUserTurn(turnSessionId, text)
+      agentEventBus.emit('chat:session-started', { sessionId: turnSessionId })
       console.log('[Main 1] 收到 send-message:', text)
 
       try {
         const adapter = createLLMAdapter()
 
         if (!adapter.hasApiKey()) {
-          agentEventBus.emit('ai:error', { message: '请先在设置页配置 API Key' })
+          emitAi('ai:error', turnSessionId, { message: '请先在设置页配置 API Key' })
           return 'no-key'
         }
 
@@ -508,12 +541,12 @@ app.whenReady().then(() => {
         const ttsQueue = useStreaming ? createStreamingTtsQueue(speechGen) : null
         if (ttsQueue) activeTtsQueue = ttsQueue
 
-        agentEventBus.emit('ai:status', { phase: 'thinking' })
+        emitAi('ai:status', turnSessionId, { phase: 'thinking' })
 
         const handleChunk = (chunk: string): void => {
           fullReply += chunk
-          agentEventBus.emit('ai:text-chunk', { text: chunk })
-          if (segmenter && ttsQueue) {
+          emitAi('ai:text-chunk', turnSessionId, { text: chunk })
+          if (segmenter && ttsQueue && !isTurnDiscarded(turnSessionId)) {
             for (const sentence of segmenter.feed(chunk)) {
               ttsQueue.pushSentence(sentence)
             }
@@ -525,98 +558,125 @@ app.whenReady().then(() => {
           {
             onChunk: handleChunk,
             onEmotion: forwardEmotionToRenderer,
-            onToolCall: async (toolCalls: ToolCall[]) => {
+            onToolCall: async (firstCalls: ToolCall[]) => {
               try {
-                console.log('[Tool] 模型请求调用工具:', toolCalls.map(t => t.name))
-                agentEventBus.emit('ai:tool-call', { tools: toolCalls.map(t => t.name) })
-                agentEventBus.emit('ai:status', {
-                  phase: 'tools',
-                  tools: toolCalls.map((t) => t.name)
-                })
+                const withRoundRule = (convo: ChatMessage[], allowMore: boolean): ChatMessage[] =>
+                  convo.map((m, i) =>
+                    i === 0 && m.role === 'system'
+                      ? {
+                          ...m,
+                          content:
+                            m.content +
+                            (allowMore
+                              ? '\n\n[本轮约束] 上一步的工具结果已在上方 tool 消息中。若还需要别的工具（例如查完时间再建提醒），直接发起正式的工具调用；否则用自然语言回答主人。严禁在正文里写 DSML、tool_calls、invoke、XML/协议标签。'
+                              : '\n\n[本轮约束] 工具已执行完毕，结果已在上方 tool 消息中。请只用自然语言直接回答主人；严禁输出 DSML、tool_calls、invoke、XML/协议标签，也禁止再次调用任何工具。')
+                        }
+                      : m
+                  )
 
-                const toolResultMessages: ChatMessage[] = []
-                for (const call of toolCalls) {
-                  const tool = getToolByName(call.name)
-                  let resultText = '工具未找到'
-                  if (tool) {
-                    try {
-                      const args = call.arguments ? JSON.parse(call.arguments) : {}
-                      resultText = await tool.execute(args)
-                      const preview =
-                        resultText.length > 160 ? `${resultText.slice(0, 160)}…` : resultText
-                      console.log('[Tool] 执行结果:', call.name, '->', preview)
-                    } catch (err) {
-                      resultText = `工具执行出错: ${err instanceof Error ? err.message : String(err)}`
-                    }
-                  }
-                  toolResultMessages.push({
-                    role: 'tool',
-                    content: resultText,
-                    tool_call_id: call.id
+                let convo: ChatMessage[] = messages
+                let calls: ToolCall[] | null = firstCalls
+                let round = 1
+                let beforeLen = fullReply.length
+
+                while (calls) {
+                  console.log('[Tool] 模型请求调用工具:', calls.map(t => t.name))
+                  emitAi('ai:tool-call', turnSessionId, { tools: calls.map(t => t.name) })
+                  emitAi('ai:status', turnSessionId, {
+                    phase: 'tools',
+                    tools: calls.map((t) => t.name)
                   })
-                }
 
-                agentEventBus.emit('ai:status', { phase: 'thinking' })
-
-                // 组装第二轮：工具结果已就绪 → 强制自然语言，禁止再写 DSML
-                const followUpMessages: ChatMessage[] = [
-                  ...messages.map((m, i) => {
-                    if (i === 0 && m.role === 'system') {
-                      return {
-                        ...m,
-                        content:
-                          m.content +
-                          '\n\n[本轮约束] 工具已执行完毕，结果已在上方 tool 消息中。请只用自然语言直接回答主人；严禁输出 DSML、tool_calls、invoke、XML/协议标签，也禁止再次调用任何工具。'
+                  const toolResultMessages: ChatMessage[] = []
+                  for (const call of calls) {
+                    const tool = getToolByName(call.name)
+                    let resultText = '工具未找到'
+                    if (tool) {
+                      try {
+                        const args = call.arguments ? JSON.parse(call.arguments) : {}
+                        resultText = await tool.execute(args)
+                        const preview =
+                          resultText.length > 160 ? `${resultText.slice(0, 160)}…` : resultText
+                        console.log('[Tool] 执行结果:', call.name, '->', preview)
+                      } catch (err) {
+                        resultText = `工具执行出错: ${err instanceof Error ? err.message : String(err)}`
                       }
                     }
-                    return m
-                  }),
-                  { role: 'assistant', content: '', tool_calls: toolCalls },
-                  ...toolResultMessages
-                ]
+                    toolResultMessages.push({
+                      role: 'tool',
+                      content: resultText,
+                      tool_call_id: call.id
+                    })
+                  }
 
-                const beforeLen = fullReply.length
-                const followUpCbs = {
-                  onChunk: handleChunk,
-                  onEmotion: forwardEmotionToRenderer,
-                  onDone: () => undefined,
-                  onError: (err: Error) => agentEventBus.emit('ai:error', { message: err.message })
+                  emitAi('ai:status', turnSessionId, { phase: 'thinking' })
+
+                  convo = [
+                    ...convo,
+                    { role: 'assistant', content: '', tool_calls: calls },
+                    ...toolResultMessages
+                  ]
+
+                  const allowMore = round < MAX_TOOL_ROUNDS
+                  let nextCalls: ToolCall[] | null = null
+                  beforeLen = fullReply.length
+                  await adapter.chatStream(
+                    withRoundRule(convo, allowMore),
+                    {
+                      onChunk: handleChunk,
+                      onEmotion: forwardEmotionToRenderer,
+                      onToolCall: allowMore
+                        ? (more: ToolCall[]) => {
+                            nextCalls = more
+                          }
+                        : undefined,
+                      onDone: () => undefined,
+                      onError: (err: Error) =>
+                        emitAi('ai:error', turnSessionId, { message: err.message })
+                    },
+                    allowMore ? toolsForModel : undefined,
+                    { toolChoice: allowMore ? 'auto' : 'none' }
+                  )
+                  calls = nextCalls
+                  round += 1
                 }
 
-                await adapter.chatStream(followUpMessages, followUpCbs, undefined, {
-                  toolChoice: 'none'
-                })
-
-                // 跟进轮几乎没正文（协议泄漏被剥光）→ 硬约束再问一次
+                // 收尾轮几乎没正文（协议泄漏被剥光）→ 硬约束再问一次
                 if (fullReply.length - beforeLen < 12) {
                   console.warn('[DeepSeek] 跟进轮正文过短，发起自然语言重试')
                   await adapter.chatStream(
                     [
-                      ...followUpMessages,
+                      ...withRoundRule(convo, false),
                       {
                         role: 'user',
                         content:
                           '请根据上面的工具结果，用中文自然语言完整回答主人的问题。不要输出任何协议标记、标签或工具调用。'
                       }
                     ],
-                    followUpCbs,
+                    {
+                      onChunk: handleChunk,
+                      onEmotion: forwardEmotionToRenderer,
+                      onDone: () => undefined,
+                      onError: (err: Error) =>
+                        emitAi('ai:error', turnSessionId, { message: err.message })
+                    },
                     undefined,
                     { toolChoice: 'none' }
                   )
                 }
 
-                finalizeAssistantTurn(text, fullReply, segmenter, ttsQueue, speechGen)
+                finalizeAssistantTurn(text, fullReply, segmenter, ttsQueue, speechGen, turnSessionId)
               } catch (err) {
                 const error = err instanceof Error ? err : new Error(String(err))
                 console.error('[Tool] 处理工具调用时出错:', error)
-                agentEventBus.emit('ai:error', { message: error.message })
+                emitAi('ai:error', turnSessionId, { message: error.message })
               }
             },
             onDone: () => {
-              finalizeAssistantTurn(text, fullReply, segmenter, ttsQueue, speechGen)
+              finalizeAssistantTurn(text, fullReply, segmenter, ttsQueue, speechGen, turnSessionId)
             },
             onError: (err) => {
-              agentEventBus.emit('ai:error', { message: err.message })
+              emitAi('ai:error', turnSessionId, { message: err.message })
             }
           },
           toolsForModel
@@ -625,7 +685,7 @@ app.whenReady().then(() => {
         return 'ok'
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error))
-        agentEventBus.emit('ai:error', { message: err.message })
+        emitAi('ai:error', turnSessionId, { message: err.message })
         return 'error'
       } finally {
         chatBusy = false

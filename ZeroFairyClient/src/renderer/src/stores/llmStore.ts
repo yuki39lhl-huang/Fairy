@@ -19,20 +19,46 @@ const TOOL_LABELS: Record<string, string> = {
 
 export const useLlmStore = defineStore('llm', () => {
   const isGenerating = ref(false)
+  /** 当前锁定输入的那一轮所属会话；删会话/新对话后作废，避免旧 ai:done 误解锁或误锁屏 */
+  const generatingSessionId = ref('')
   const phase = ref<AgentPhase>('idle')
   const statusText = ref('')
   const currentProvider = ref('deepseek')
   const currentModel = ref('deepseek-v4-flash')
 
-  function setGenerating(val: boolean): void {
+  function setGenerating(val: boolean, sessionId = ''): void {
     isGenerating.value = val
     if (!val) {
+      generatingSessionId.value = ''
       phase.value = 'idle'
       statusText.value = ''
-    } else if (phase.value === 'idle') {
-      phase.value = 'thinking'
-      statusText.value = 'Fairy 思考中…'
+    } else {
+      generatingSessionId.value = sessionId
+      if (phase.value === 'idle') {
+        phase.value = 'thinking'
+        statusText.value = 'Fairy 思考中…'
+      }
     }
+  }
+
+  /** 用户离开当前生成中的会话（删除 / 新对话 / 切走）时立刻放开输入 */
+  function abandonGeneration(): void {
+    isGenerating.value = false
+    generatingSessionId.value = ''
+    phase.value = 'idle'
+    statusText.value = ''
+  }
+
+  /** 仅当事件属于当前锁定的会话时才结束生成（旧回合收尾不会误伤新提问） */
+  function endGenerationForSession(sessionId?: string): void {
+    if (sessionId && generatingSessionId.value && sessionId !== generatingSessionId.value) return
+    setGenerating(false)
+  }
+
+  function acceptsSession(sessionId?: string): boolean {
+    if (!isGenerating.value) return false
+    if (!sessionId || !generatingSessionId.value) return true
+    return sessionId === generatingSessionId.value
   }
 
   function setThinking(): void {
@@ -61,11 +87,15 @@ export const useLlmStore = defineStore('llm', () => {
 
   return {
     isGenerating,
+    generatingSessionId,
     phase,
     statusText,
     currentProvider,
     currentModel,
     setGenerating,
+    abandonGeneration,
+    endGenerationForSession,
+    acceptsSession,
     setThinking,
     setTools,
     setStreaming,

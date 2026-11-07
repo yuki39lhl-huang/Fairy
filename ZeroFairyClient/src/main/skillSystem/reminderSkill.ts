@@ -40,11 +40,36 @@ function str(args: Record<string, unknown>, key: string): string | undefined {
   return typeof args[key] === 'string' ? (args[key] as string) : undefined
 }
 
+/** 「23:00」取今天（已过则明天）；「2026-10-17 23:00」按本地时间。返回距现在的秒数。 */
+function secondsUntil(raw: string): number | undefined {
+  const text = raw.trim()
+  const clock = text.match(/^(\d{1,2})[:：](\d{2})(?:[:：](\d{2}))?$/)
+  if (clock) {
+    const target = new Date()
+    target.setHours(Number(clock[1]), Number(clock[2]), Number(clock[3] ?? 0), 0)
+    if (target.getTime() <= Date.now()) target.setDate(target.getDate() + 1)
+    return Math.round((target.getTime() - Date.now()) / 1000)
+  }
+  const stamp = new Date(text.replace(/\//g, '-').replace(' ', 'T'))
+  if (Number.isNaN(stamp.getTime())) return undefined
+  return Math.round((stamp.getTime() - Date.now()) / 1000)
+}
+
+/** 模型偶尔用 time / datetime 代替 at，一并认 */
+function resolveDelay(args: Record<string, unknown>): number | undefined {
+  if (args.delaySeconds != null) {
+    const delay = Number(args.delaySeconds)
+    return Number.isFinite(delay) ? delay : undefined
+  }
+  const at = str(args, 'at') ?? str(args, 'time') ?? str(args, 'datetime')
+  return at ? secondsUntil(at) : undefined
+}
+
 async function createReminder(args: Record<string, unknown>): Promise<string> {
   const message = str(args, 'message')
-  const delaySeconds = Number(args.delaySeconds)
-  if (!message?.trim() || !Number.isFinite(delaySeconds) || delaySeconds <= 0) {
-    return '新建失败：需要提醒内容 message，以及大于 0 的 delaySeconds。'
+  const delaySeconds = resolveDelay(args)
+  if (!message?.trim() || delaySeconds === undefined || delaySeconds <= 0) {
+    return '新建失败：需要提醒内容 message，以及大于 0 的 delaySeconds 或一个未来的 at 时间。'
   }
   const record = scheduleReminder(message.trim(), delaySeconds, 'fairy')
   const fire = new Date(record.fireAt)
@@ -59,7 +84,7 @@ async function updateOne(args: Record<string, unknown>): Promise<string> {
   const match = str(args, 'match')
   const latest = args.latest === true
   const message = str(args, 'message')
-  const delaySeconds = args.delaySeconds == null ? undefined : Number(args.delaySeconds)
+  const delaySeconds = resolveDelay(args)
   const target = resolvePendingReminder({
     id,
     match,
@@ -98,7 +123,7 @@ export const reminderSkill: FairySkill = {
   name: 'reminder',
   title: '定时任务',
   description:
-    'Fairy 的定时任务技能，增删改查都用这一个入口。action 只能是 create（增）、list（查）、update（改）、delete（删）。主人要纠正、修改或取消已有提醒时，用 update 或 delete，禁止用 create 再加一条把错误的留着。只改文案时不要传 delaySeconds。',
+    'Fairy 的定时任务技能，增删改查都用这一个入口。action 只能是 create（增）、list（查）、update（改）、delete（删）。主人说「几分钟后」用 delaySeconds；说「几点」用 at（如 23:00），不必先查时间。主人要纠正、修改或取消已有提醒时，用 update 或 delete，禁止用 create 再加一条把错误的留着。只改文案时不要传 delaySeconds / at。',
   parameters: {
     type: 'object',
     properties: {
@@ -114,7 +139,12 @@ export const reminderSkill: FairySkill = {
       },
       delaySeconds: {
         type: 'number',
-        description: '多少秒后提醒。create 必填。update 不传则保持原来的到点时间'
+        description: '多少秒后提醒。create 时与 at 二选一。update 不传则保持原来的到点时间'
+      },
+      at: {
+        type: 'string',
+        description:
+          '到点的本地时间，例如「23:00」（今天，已过则明天）或「2026-10-17 23:00」。create 时与 delaySeconds 二选一'
       },
       id: { type: 'string', description: '要修改或删除的提醒 id，优先用系统提示里给出的 id' },
       match: {

@@ -66,10 +66,19 @@ function toggleOne(session: string): void {
     : [...selected.value, session]
 }
 
+function abandonActiveTurn(): void {
+  if (!llmStore.isGenerating) return
+  const prev = llmStore.generatingSessionId || chatStore.sessionId
+  llmStore.abandonGeneration()
+  chatStore.abandonStream()
+  if (prev) void window.api?.abandonChatTurn?.(prev)
+}
+
 async function removeSelected(): Promise<void> {
   const ids = [...selected.value]
   if (ids.length === 0) return
   const dropCurrent = ids.includes(chatStore.sessionId)
+  if (dropCurrent || ids.includes(llmStore.generatingSessionId)) abandonActiveTurn()
   for (const id of ids) {
     await window.api?.deleteChatSession?.(id)
   }
@@ -80,7 +89,10 @@ async function removeSelected(): Promise<void> {
 }
 
 async function openSession(row: SessionRow): Promise<void> {
-  if (llmStore.isGenerating) return
+  if (row.session === chatStore.sessionId) {
+    await router.push('/chat')
+    return
+  }
   try {
     const rows = (await window.api?.getChatMessages(row.session)) ?? []
     chatStore.loadSession(

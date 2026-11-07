@@ -70,20 +70,57 @@ function applyLexicon(text: string): string {
 }
 
 const DOMAIN_BODY =
-  '(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:com|cn|org|net|edu|gov|io|co|wiki|me|app|dev|ai|tv|cc|jp|kr|uk|de|fr|ru|info|xyz|top|site)'
+  '(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:com|cn|org|net|edu|gov|io|co|wiki|me|app|dev|ai|tv|cc|jp|kr|tw|hk|uk|de|fr|ru|info|xyz|top|site)'
 
-function looksLikeDomain(text: string): boolean {
-  return new RegExp(`^${DOMAIN_BODY}$`, 'i').test(text.trim())
+const URL_OR_DOMAIN = `(?:https?:\\/\\/[^\\s，。！？、；：)）」』\\]]+|www\\.[^\\s，。！？、；：)）」』\\]]+|${DOMAIN_BODY}(?:\\.[a-z]{2,3})?(?:\\/[^\\s，。！？、；：)）」』\\]]*)?)`
+
+/**
+ * 专门用括号包起来的来源整段不念。
+ * 例如 （[来源]post.smzdm.com、[来源]taptap.cn）
+ * 普通括号（火·峰御）不含站点名，会保留。
+ */
+export function stripSourceParens(text: string): string {
+  return text.replace(/[（(][^（）()\n]{0,500}[）)]/g, (block) => {
+    const inner = block.slice(1, -1)
+    const looksLikeSource =
+      /来源|出处|参考/.test(inner) ||
+      /\[[^\]]{1,24}\]\s*(?:https?:\/\/|[a-z0-9.-]+\.[a-z]{2,})/i.test(inner) ||
+      /(?:^|[、,，\s])(?:[a-z0-9-]+\.)+[a-z]{2,}\b/i.test(inner)
+    if (!looksLikeSource) return block
+    const leftover = inner
+      .replace(/来源|出处|参考/g, '')
+      .replace(/\[[^\]]*\]/g, '')
+      .replace(/https?:\/\/\S+/gi, '')
+      .replace(/(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/\S*)?/gi, '')
+      .replace(/[^\u4e00-\u9fffA-Za-z0-9]+/g, '')
+    return leftover ? block : ''
+  })
+}
+
+/**
+ * 来源引用整段不念，包括方括号里的站点名。
+ * 例如 （[来源]post.smzdm.com、[巴哈姆特]gnn.gamer.com.tw）
+ */
+function stripCitations(text: string): string {
+  const labeled = new RegExp(`[\\[【][^\\]】\\n]{1,24}[\\]】]\\s*${URL_OR_DOMAIN}`, 'gi')
+  let result = text.replace(labeled, '')
+  result = result.replace(new RegExp(`来源\\s*[:：]\\s*${URL_OR_DOMAIN}`, 'gi'), '')
+  result = result.replace(/[（(][^（）()]{0,240}[）)]/g, (block) => {
+    const inner = block
+      .slice(1, -1)
+      .replace(/来源/g, '')
+      .replace(new RegExp(URL_OR_DOMAIN, 'gi'), '')
+      .replace(/[\s、,，;；:：.。\[\]【】]/g, '')
+    return inner ? block : ''
+  })
+  return result
 }
 
 /** 链接只留在屏幕上，朗读稿里整段拿掉，不读网址，也不读成「链接」。 */
 function stripLinks(text: string): string {
-  let result = text
-  result = result.replace(/\[([^\]]+)\]\((?:https?:\/\/|www\.)[^)\s]+\)/gi, (_m, label: string) => {
-    const name = label.trim()
-    if (!name || /^https?:\/\//i.test(name) || /^www\./i.test(name) || looksLikeDomain(name)) return ''
-    return name
-  })
+  let result = stripSourceParens(text)
+  result = result.replace(/\[[^\]]+\]\((?:https?:\/\/|www\.)[^)\s]+\)/gi, '')
+  result = stripCitations(result)
   result = result.replace(/https?:\/\/[^\s，。！？、；：)）」』\]]+/gi, '')
   result = result.replace(/\bwww\.[^\s，。！？、；：)）」』\]]+/gi, '')
   result = result.replace(
@@ -95,7 +132,6 @@ function stripLinks(text: string): string {
 
 function normalizeSymbols(text: string): string {
   let result = stripLinks(text)
-  result = result.replace(/[（(][^）)]*[）)](?=[。！？…]|\s*$)/g, '')
   result = result.replace(/[-_*=~]{2,}/g, '，')
   result = result.replace(/[—–―−]+/g, '，')
   result = result.replace(/…+/g, '，')

@@ -27,6 +27,9 @@ const api = {
   deleteChatSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('chat:delete-session', sessionId),
 
+  abandonChatTurn: (sessionId: string): Promise<boolean> =>
+    ipcRenderer.invoke('chat:abandon-turn', sessionId),
+
   getChatMessages: (
     sessionId: string
   ): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> =>

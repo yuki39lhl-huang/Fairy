@@ -18,14 +18,19 @@ export interface ChatStreamOptions {
  */
 
 const DSML = String.raw`(?:\|?\s*｜?\s*DSML\s*｜?\s*\|?\s*)`
-const TOOL_BLOCK_START_RE = new RegExp(`<${DSML}?\\s*(?:tool_)?calls>`, 'i')
-const TOOL_BLOCK_END_RE = new RegExp(`</${DSML}?\\s*(?:tool_)?calls>`, 'i')
+/** `<` 与标签名之间的特殊 token 残片（｜、DSML、不可见字符等），不含字母、斜杠和尖括号 */
+const JUNK = String.raw`[^<>/a-zA-Z]{0,16}(?:DSML[^<>/a-zA-Z]{0,16})?`
+const OPEN = `<${JUNK}`
+const CLOSE = `<${JUNK}/${JUNK}`
+const CALLS = String.raw`(?:tool_|function_)?calls\s*>`
+const TOOL_BLOCK_START_RE = new RegExp(`${OPEN}${CALLS}`, 'i')
+const TOOL_BLOCK_END_RE = new RegExp(`${CLOSE}${CALLS}`, 'i')
 const INVOKE_RE = new RegExp(
-  `<${DSML}?\\s*invoke\\s+name="([^"]+)"[^>]*>([\\s\\S]*?)</${DSML}?\\s*invoke>`,
+  `${OPEN}invoke\\s+name="([^"]+)"[^>]*>([\\s\\S]*?)${CLOSE}invoke\\s*>`,
   'gi'
 )
 const PARAM_RE = new RegExp(
-  `<${DSML}?\\s*parameter\\s+name="([^"]+)"(?:\\s+string="([^"]*)")?[^>]*>([\\s\\S]*?)</${DSML}?\\s*parameter>`,
+  `${OPEN}parameter\\s+name="([^"]+)"(?:\\s+string="([^"]*)")?[^>]*>([\\s\\S]*?)${CLOSE}parameter\\s*>`,
   'gi'
 )
 
@@ -68,9 +73,8 @@ function stripLooseDsml(text: string): string {
   return text
     .replace(new RegExp(`</?${DSML}[^>]*>`, 'gi'), '')
     .replace(/[|｜]\s*[|｜]?\s*DSML\s*[|｜]?\s*[|｜]?/gi, '')
-    .replace(/<\/?(?:tool_)?calls>/gi, '')
-    .replace(/<\/?invoke\b[^>]*>/gi, '')
-    .replace(/<\/?parameter\b[^>]*>/gi, '')
+    .replace(new RegExp(`(?:${CLOSE}|${OPEN})${CALLS}`, 'gi'), '')
+    .replace(new RegExp(`(?:${CLOSE}|${OPEN})(?:invoke|parameter)\\b[^>]*>`, 'gi'), '')
     .replace(/invoke\s+name=(?:"[^"]*"|'[^']*')/gi, '')
 }
 
@@ -188,7 +192,7 @@ export class DeepSeekModel extends BaseModel {
           }
 
           // 可能落在未写完的 `<｜DSML` / `<calls` 前缀上：扣住尾部再等
-          const hold = scan.match(/<[|｜\w\s]{0,24}$/)
+          const hold = scan.match(/<[^<>\n]{0,40}$/)
           if (hold) {
             const safe = scan.slice(0, -hold[0].length)
             const clean = stripLooseDsml(safe)

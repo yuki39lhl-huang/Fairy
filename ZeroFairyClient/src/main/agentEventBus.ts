@@ -14,6 +14,7 @@ export type AgUiEventType =
     | 'ai:audio-reset'
     | 'ai:done'
     | 'ai:error'
+    | 'chat:session-started'
     | 'reminder:changed'
 
 export interface AgUiEvent {

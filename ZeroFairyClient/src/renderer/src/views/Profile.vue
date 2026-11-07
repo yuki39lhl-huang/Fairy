@@ -400,19 +400,20 @@ async function saveProfile(): Promise<void> {
 .option-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
 }
 
 .option {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
   width: 100%;
-  padding: 11px 14px;
-  border: 0.5px solid var(--agent-border-strong);
-  border-radius: 10px;
-  background: var(--agent-surface-2);
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
   color: var(--agent-text-mid);
   font: inherit;
   text-align: left;
@@ -420,23 +421,27 @@ async function saveProfile(): Promise<void> {
 }
 
 .option:hover {
-  background: var(--agent-surface-3);
+  background: var(--agent-sidebar-hover);
   color: var(--agent-text);
 }
 
 .option.active {
-  border-color: var(--agent-accent);
-  background: color-mix(in srgb, var(--agent-accent) 12%, var(--agent-surface-2));
+  background: var(--agent-sidebar-active);
   color: var(--agent-text);
 }
 
 .option-name {
+  flex-shrink: 0;
   font-size: 13px;
   font-weight: 500;
 }
 
 .option-hint {
-  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
   color: var(--agent-text-dim);
 }
 

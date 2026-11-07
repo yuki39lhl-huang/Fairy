@@ -54,19 +54,27 @@ onMounted(() => {
   })
 
   window.api.onAgUiEvent((event) => {
+    const sessionId =
+      event.payload && typeof event.payload === 'object' && 'sessionId' in event.payload
+        ? String((event.payload as { sessionId?: string }).sessionId ?? '')
+        : ''
+
     switch (event.type) {
       case 'ai:text-chunk': {
+        if (!llmStore.acceptsSession(sessionId)) break
         const payload = event.payload as { text: string }
         llmStore.setStreaming()
-        chatStore.appendStreamChunk(payload.text)
+        chatStore.appendStreamChunk(payload.text, sessionId || undefined)
         break
       }
       case 'ai:tool-call': {
+        if (!llmStore.acceptsSession(sessionId)) break
         const payload = event.payload as { tools?: string[] }
         llmStore.setTools(payload.tools ?? [])
         break
       }
       case 'ai:status': {
+        if (!llmStore.acceptsSession(sessionId)) break
         const payload = event.payload as { phase?: string; tools?: string[] }
         if (payload.phase === 'thinking') llmStore.setThinking()
         else if (payload.phase === 'tools') llmStore.setTools(payload.tools ?? [])
@@ -92,14 +100,14 @@ onMounted(() => {
         break
       }
       case 'ai:done': {
-        chatStore.commitStreamMessage()
-        llmStore.setGenerating(false)
+        chatStore.commitStreamMessage(sessionId || undefined)
+        llmStore.endGenerationForSession(sessionId || undefined)
         break
       }
       case 'ai:error': {
         const payload = event.payload as { message: string }
         console.error('[AG-UI] 错误:', payload.message)
-        llmStore.setGenerating(false)
+        llmStore.endGenerationForSession(sessionId || undefined)
         break
       }
     }

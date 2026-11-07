@@ -235,10 +235,6 @@ watch([historyOpen, collapsed, peeking], async () => {
 })
 
 async function refreshSessions(): Promise<void> {
-  if (!window.api?.listChatSessions) {
-    sessions.value = []
-    return
-  }
   try {
     sessions.value = (await window.api.listChatSessions(workMode.value)).filter((row) =>
       sessionInLane(row.session, workMode.value)
@@ -281,7 +277,7 @@ onMounted(async () => {
   }
   window.addEventListener('fairy-sessions-changed', onSessionsChanged)
   window.api?.onAgUiEvent?.((event) => {
-    if (event.type === 'ai:done') void refreshSessions()
+    if (event.type === 'ai:done' || event.type === 'chat:session-started') void refreshSessions()
   })
   historyObserver = new ResizeObserver(() => measureHistory())
   await nextTick()
@@ -313,19 +309,29 @@ function isActive(to: string): boolean {
   return activePath.value === to || activePath.value.startsWith(to + '/')
 }
 
+function abandonActiveTurn(): void {
+  if (!llmStore.isGenerating) return
+  const prev = llmStore.generatingSessionId || chatStore.sessionId
+  llmStore.abandonGeneration()
+  chatStore.abandonStream()
+  if (prev) void window.api?.abandonChatTurn?.(prev)
+}
+
 function doNewChat(): void {
   chatStore.activate(workMode.value)
   chatStore.startNewSession()
   focusedProjectDir.value = ''
   codeProjectFocus.value = false
-  llmStore.setGenerating(false)
   void refreshSessions()
   if (route.path !== '/chat') void router.push('/chat')
 }
 
 async function openSession(row: SessionRow): Promise<void> {
-  if (llmStore.isGenerating) return
   chatStore.activate(workMode.value)
+  if (row.session === chatStore.sessionId) {
+    if (route.path !== '/chat') await router.push('/chat')
+    return
+  }
   const linked = projectDirs.value.find((dir) => sameProjectDir(dir, row.projectDir || '')) || ''
   focusedProjectDir.value = linked
   codeProjectFocus.value = Boolean(linked)
@@ -369,13 +375,12 @@ function startProjectSession(dir: string): void {
   folderOpen.value = { ...folderOpen.value, [key]: true }
   chatStore.activate('code')
   chatStore.startNewSession()
-  llmStore.setGenerating(false)
   focusedProjectDir.value = dir
   codeProjectFocus.value = true
   const sessionId = chatStore.sessionId
   void (async () => {
     await window.api?.bindChatProject?.(sessionId, dir)
-    if (window.api?.listChatSessions) await refreshSessions()
+    await refreshSessions()
     if (!sessions.value.some((row) => row.session === sessionId)) {
       sessions.value.unshift({
         session: sessionId,
@@ -564,8 +569,11 @@ async function commitRename(): Promise<void> {
 
 async function deleteSession(row: SessionRow): Promise<void> {
   historyMenu.value = null
+  const wasCurrent = chatStore.sessionId === row.session
+  const wasGenerating = llmStore.generatingSessionId === row.session
+  if (wasCurrent || wasGenerating) abandonActiveTurn()
   await window.api?.deleteChatSession?.(row.session)
-  if (chatStore.sessionId === row.session) {
+  if (wasCurrent) {
     chatStore.startNewSession()
     if (route.path !== '/chat') await router.push('/chat')
   }
@@ -859,8 +867,15 @@ function closeWindow(): void {
           </button>
           <div v-if="accountOpen" class="account-menu" role="menu">
             <div class="account-name">{{ displayName }}</div>
+            <div class="account-sep" />
             <button type="button" class="account-item" role="menuitem" @click="openSettings">
-              设置
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.2 7.2 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.58.23-1.12.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.31.6.22l2.39-.96c.5.4 1.05.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.58-.23 1.12-.54 1.63-.94l2.39.96c.22.09.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"
+                />
+              </svg>
+              <span>设置</span>
             </button>
           </div>
         </div>
@@ -896,9 +911,14 @@ function closeWindow(): void {
 
     <div v-if="settingsOpen" class="settings-mask" @click.self="closeSettings">
       <div class="settings-float" role="dialog" aria-modal="true" aria-label="设置">
-        <button type="button" class="settings-close" aria-label="关闭设置" @click="closeSettings">
-          ×
-        </button>
+        <header class="settings-bar">
+          <h2>设置</h2>
+          <button type="button" class="settings-close" aria-label="关闭设置" @click="closeSettings">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4.2 4.2l7.6 7.6M11.8 4.2l-7.6 7.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+            </svg>
+          </button>
+        </header>
         <Config />
       </div>
     </div>
@@ -1064,43 +1084,45 @@ function closeWindow(): void {
   width: 100%;
 }
 
-.account.alone {
-  width: auto;
-}
-
 .account-menu {
   position: absolute;
-  left: 0;
-  bottom: calc(100% + 6px);
+  left: 4px;
+  bottom: calc(100% + 8px);
   z-index: 30;
-  width: 100%;
-  min-width: 180px;
+  width: 232px;
   padding: 6px;
   border-radius: 12px;
-  background: var(--agent-surface);
-  box-shadow: var(--agent-elevation-panel);
+  background: #2b2b2b;
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
   -webkit-app-region: no-drag;
-}
-
-.account.alone .account-menu {
-  left: calc(100% + 8px);
-  bottom: 0;
-  width: 180px;
 }
 
 .account-name {
   padding: 8px 10px 6px;
-  font-size: 12px;
-  color: var(--agent-text-dim);
+  font-size: 13px;
+  color: var(--agent-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-sep {
+  height: 0.5px;
+  margin: 4px 8px;
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .account-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  padding: 8px 10px;
+  height: 32px;
+  padding: 0 10px;
   border: none;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.001);
+  background: transparent;
   color: var(--agent-text);
   font: inherit;
   font-size: 13px;
@@ -1108,8 +1130,15 @@ function closeWindow(): void {
   cursor: pointer;
 }
 
+.account-item svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--agent-text-mid);
+}
+
 .account-item:hover {
-  background: var(--agent-sidebar-hover);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .nav-primary {
@@ -1416,15 +1445,9 @@ function closeWindow(): void {
   color: var(--agent-text);
 }
 
-.nav-dot {
-  font-size: 12px;
-  font-weight: 600;
-}
-
 .sidebar-foot {
   margin-top: auto;
   padding-top: 6px;
-  border-top: none;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -1471,13 +1494,6 @@ function closeWindow(): void {
 
 .user-chip.active {
   background: var(--agent-sidebar-active);
-}
-
-.user-chip.alone {
-  width: 36px;
-  height: 36px;
-  justify-content: center;
-  padding: 0;
 }
 
 .user-avatar {
@@ -1604,37 +1620,60 @@ function closeWindow(): void {
   inset: 0;
   z-index: 40;
   display: flex;
-  padding: calc(40px + clamp(14px, 2.4vh, 28px)) clamp(18px, 8vw, 176px) clamp(14px, 2.4vh, 28px);
-  background: rgba(0, 0, 0, 0.52);
+  justify-content: center;
+  align-items: flex-start;
+  padding: 56px 7vw 28px;
+  background: rgba(0, 0, 0, 0.55);
   -webkit-app-region: no-drag;
 }
 
 .settings-float {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  width: min(1240px, 100%);
+  height: 100%;
+  border-radius: 16px;
   overflow: hidden;
-  background: var(--agent-bg);
-  border: 0.5px solid var(--agent-border-strong);
-  box-shadow: var(--agent-elevation-panel);
+  background: #1c1c1c;
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+
+.settings-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 52px;
+  padding: 0 12px 0 20px;
+  flex-shrink: 0;
+}
+
+.settings-bar h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.settings-float :deep(.settings) {
+  flex: 1;
+  min-height: 0;
 }
 
 .settings-close {
-  position: absolute;
-  top: 12px;
-  right: 16px;
-  z-index: 2;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border: none;
   border-radius: 8px;
-  background: var(--agent-bg);
+  background: transparent;
   color: var(--agent-text-mid);
-  font-size: 18px;
-  line-height: 1;
+  display: grid;
+  place-items: center;
   cursor: pointer;
+}
+
+.settings-close svg {
+  width: 14px;
+  height: 14px;
 }
 
 .settings-close:hover {

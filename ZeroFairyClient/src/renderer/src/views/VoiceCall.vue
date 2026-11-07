@@ -35,7 +35,8 @@ async function sendVoiceMessage(text: string): Promise<void> {
   if (!text.trim() || llmStore.isGenerating) return
 
   chatStore.addMessage('user', text)
-  llmStore.setGenerating(true)
+  chatStore.armStream()
+  llmStore.setGenerating(true, chatStore.sessionId)
   callState.value = 'waiting'
 
   const history = chatStore.messages.slice(0, -1).map((msg) => ({
@@ -44,10 +45,10 @@ async function sendVoiceMessage(text: string): Promise<void> {
   }))
 
   try {
-    await window.api.sendMessage(text, history)
+    await window.api.sendMessage(text, history, chatStore.sessionId)
   } catch (error) {
     console.error('[VoiceCall] send error', error)
-    llmStore.setGenerating(false)
+    llmStore.endGenerationForSession(chatStore.sessionId)
     startListening()
   }
 }

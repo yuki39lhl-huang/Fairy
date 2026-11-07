@@ -42,6 +42,13 @@ const displayMessages = computed(() => {
 
 const isEmpty = computed(() => displayMessages.value.length === 0)
 
+/** 只有当前这条会话在生成时才锁输入；别的会话照常可以打字 */
+const sessionBusy = computed(
+  () =>
+    llmStore.isGenerating &&
+    (!llmStore.generatingSessionId || llmStore.generatingSessionId === chatStore.sessionId)
+)
+
 async function scrollToBottom(): Promise<void> {
   await nextTick()
   if (messagesEl.value) {
@@ -56,19 +63,19 @@ watch(displayMessages, () => {
 watch(
   () => llmStore.statusText,
   () => {
-    if (llmStore.isGenerating) void scrollToBottom()
+    if (sessionBusy.value) void scrollToBottom()
   }
 )
 
 async function sendMessage(): Promise<void> {
   const text = inputText.value.trim()
-  if (!text || llmStore.isGenerating) return
+  if (!text || sessionBusy.value) return
   const hit = matchKeyword(text)
 
   inputText.value = ''
   chatStore.armStream()
   chatStore.addMessage('user', text)
-  llmStore.setGenerating(true)
+  llmStore.setGenerating(true, chatStore.sessionId)
   await scrollToBottom()
 
   const history = chatStore.messages.slice(0, -1).map((msg) => ({
@@ -82,7 +89,7 @@ async function sendMessage(): Promise<void> {
     await window.api.sendMessage(text, history, chatStore.sessionId)
   } catch (error) {
     console.error('[Chat] 发送失败:', error)
-    llmStore.setGenerating(false)
+    llmStore.endGenerationForSession(chatStore.sessionId)
   }
   await scrollToBottom()
 }
@@ -253,14 +260,14 @@ function formatMessageHtml(raw: string): string {
             <p v-if="msg.role === 'user'" class="bubble-text">{{ msg.content }}</p>
             <div v-else class="bubble-text md" v-html="formatMessageHtml(msg.content)" />
             <span
-              v-if="msg.role === 'assistant' && llmStore.isGenerating && index === displayMessages.length - 1"
+              v-if="msg.role === 'assistant' && sessionBusy && index === displayMessages.length - 1"
               class="cursor"
               >▍</span
             >
           </div>
         </div>
 
-        <div v-if="llmStore.isGenerating && !chatStore.streamingContent" class="status-row">
+        <div v-if="sessionBusy && !chatStore.streamingContent" class="status-row">
           <span class="status-dot" />
           <span class="status-text">{{ llmStore.statusText || 'Fairy 思考中…' }}</span>
         </div>
@@ -274,7 +281,7 @@ function formatMessageHtml(raw: string): string {
           class="composer-input"
           rows="1"
           :placeholder="codeProjectFocus ? '描述想在这个文件夹里做的事' : '给 Fairy 发消息'"
-          :disabled="llmStore.isGenerating || micState !== 'idle'"
+          :disabled="sessionBusy || micState !== 'idle'"
           @keydown="handleKeydown"
         />
         <div class="composer-actions">
@@ -282,7 +289,7 @@ function formatMessageHtml(raw: string): string {
             type="button"
             class="icon-btn"
             :class="{ live: micState === 'recording', busy: micState === 'transcribing' }"
-            :disabled="llmStore.isGenerating || micState === 'transcribing'"
+            :disabled="sessionBusy || micState === 'transcribing'"
             :title="micButtonTitle"
             @click="handleMicClick"
           >
@@ -295,7 +302,7 @@ function formatMessageHtml(raw: string): string {
           <button
             type="button"
             class="send-btn"
-            :disabled="llmStore.isGenerating || !inputText.trim() || micState !== 'idle'"
+            :disabled="sessionBusy || !inputText.trim() || micState !== 'idle'"
             @click="sendMessage"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -638,10 +645,10 @@ function formatMessageHtml(raw: string): string {
 .footnote,
 .error {
   width: 100%;
-  margin: 10px auto 0;
+  margin: 20px auto 0;
   text-align: center;
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.6;
 }
 
 .footnote {

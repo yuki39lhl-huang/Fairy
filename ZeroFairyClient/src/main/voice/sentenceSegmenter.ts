@@ -1,5 +1,8 @@
 // src/main/voice/sentenceSegmenter.ts
 // 按完整句子切给 TTS。逗号不切开，避免听起来一段一段；只有特别长才在逗号处收一刀。
+// 来源括号没收齐之前不切出去，避免把（[来源]xxx）读出来。
+
+import { stripSourceParens } from './speakScript'
 
 const SENTENCE_END = /[。！？!?…]+/
 
@@ -10,6 +13,15 @@ const FORCE_AT = 120
 
 function visibleLen(text: string): number {
   return text.replace(/\s+/g, '').length
+}
+
+function parenDepth(text: string): number {
+  let depth = 0
+  for (const ch of text) {
+    if (ch === '（' || ch === '(') depth += 1
+    else if ((ch === '）' || ch === ')') && depth > 0) depth -= 1
+  }
+  return depth
 }
 
 function findCut(buffer: string): number {
@@ -51,10 +63,11 @@ export function createSentenceSegmenter(): {
   }
 
   function feed(chunk: string): string[] {
-    buffer += chunk.replace(/\r\n/g, '\n')
+    buffer = stripSourceParens(buffer + chunk.replace(/\r\n/g, '\n'))
     const sentences: string[] = []
 
     while (buffer.length > 0) {
+      if (parenDepth(buffer) > 0 && visibleLen(buffer) < 480) break
       const cut = findCut(buffer)
       if (cut < 0) break
       const raw = buffer.slice(0, cut)
@@ -67,7 +80,7 @@ export function createSentenceSegmenter(): {
   }
 
   function flush(): string {
-    const rest = `${held}${buffer}`.replace(/\s+/g, ' ').trim()
+    const rest = stripSourceParens(`${held}${buffer}`).replace(/\s+/g, ' ').trim()
     held = ''
     buffer = ''
     return rest

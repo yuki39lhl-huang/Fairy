@@ -7,6 +7,20 @@ import BackgroundMusic from './BackgroundMusic.vue'
 type SectionId = 'profile' | 'bgm' | 'api' | 'voice'
 
 const section = ref<SectionId>('profile')
+const navQuery = ref('')
+
+const navItems: Array<{ id: SectionId; label: string }> = [
+  { id: 'profile', label: '个人资料' },
+  { id: 'bgm', label: '背景音乐' },
+  { id: 'api', label: 'API' },
+  { id: 'voice', label: '语音' }
+]
+
+const visibleNav = computed(() => {
+  const q = navQuery.value.trim().toLowerCase()
+  if (!q) return navItems
+  return navItems.filter((item) => item.label.toLowerCase().includes(q))
+})
 const apiKey = ref('')
 const savedMask = ref('')
 const saving = ref(false)
@@ -217,44 +231,41 @@ async function retryEnsureVoice(): Promise<void> {
 <template>
   <div class="settings">
     <aside class="rail">
-      <h1 class="rail-title">设置</h1>
+      <label class="rail-search">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.3" />
+          <path d="M10.4 10.4L13 13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+        </svg>
+        <input v-model="navQuery" type="search" placeholder="搜索" />
+      </label>
       <nav class="rail-nav">
         <button
+          v-for="item in visibleNav"
+          :key="item.id"
           type="button"
           class="rail-item"
-          :class="{ active: section === 'profile' }"
-          @click="section = 'profile'"
+          :class="{ active: section === item.id }"
+          @click="section = item.id"
         >
-          <span class="rail-label">个人资料</span>
-          <span class="rail-hint">名字、头像与身份</span>
+          <svg v-if="item.id === 'profile'" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="5.2" r="2.3" fill="none" stroke="currentColor" stroke-width="1.3" />
+            <path d="M3.4 12.6c.7-2 2.4-3 4.6-3s3.9 1 4.6 3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+          </svg>
+          <svg v-else-if="item.id === 'bgm'" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M6 11.5V4.2L13 3v7.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+            <circle cx="4.6" cy="11.5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3" />
+            <circle cx="11.6" cy="10.2" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3" />
+          </svg>
+          <svg v-else-if="item.id === 'api'" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M6.2 5.2L3.2 8l3 2.8M9.8 5.2l3 2.8-3 2.8M9 3.6L7 12.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <svg v-else viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="6.4" y="2.4" width="3.2" height="6.2" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.3" />
+            <path d="M4.2 7.4a3.8 3.8 0 0 0 7.6 0M8 11.2V13.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+          </svg>
+          <span>{{ item.label }}</span>
         </button>
-        <button
-          type="button"
-          class="rail-item"
-          :class="{ active: section === 'bgm' }"
-          @click="section = 'bgm'"
-        >
-          <span class="rail-label">背景音乐</span>
-          <span class="rail-hint">曲库与音量</span>
-        </button>
-        <button
-          type="button"
-          class="rail-item"
-          :class="{ active: section === 'api' }"
-          @click="section = 'api'"
-        >
-          <span class="rail-label">API</span>
-          <span class="rail-hint">模型与搜索密钥</span>
-        </button>
-        <button
-          type="button"
-          class="rail-item"
-          :class="{ active: section === 'voice' }"
-          @click="section = 'voice'"
-        >
-          <span class="rail-label">语音</span>
-          <span class="rail-hint">厂家与声线</span>
-        </button>
+        <p v-if="visibleNav.length === 0" class="rail-empty">没有匹配的设置</p>
       </nav>
     </aside>
 
@@ -589,22 +600,44 @@ async function retryEnsureVoice(): Promise<void> {
 }
 
 .rail {
-  width: 200px;
+  width: 196px;
   flex-shrink: 0;
-  padding: 0 14px 20px;
-  border-right: 0.5px solid var(--agent-border-strong);
-  background: var(--agent-sidebar);
+  padding: 8px 10px 16px;
+  border-right: 0.5px solid var(--agent-border);
+  background: transparent;
 }
 
-.rail-title {
+.rail-search {
   display: flex;
   align-items: center;
-  height: 56px;
-  margin: 0 12px 8px;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  line-height: 1;
+  gap: 8px;
+  height: 32px;
+  margin: 0 2px 10px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--agent-surface-2);
+  color: var(--agent-text-dim);
+}
+
+.rail-search svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.rail-search input {
+  width: 100%;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--agent-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.rail-search input::placeholder {
+  color: var(--agent-text-dim);
 }
 
 .rail-nav {
@@ -615,18 +648,25 @@ async function retryEnsureVoice(): Promise<void> {
 
 .rail-item {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
+  align-items: center;
+  gap: 8px;
   width: 100%;
-  padding: 10px 12px;
+  height: 32px;
+  padding: 0 10px;
   border: none;
-  border-radius: 10px;
+  border-radius: 8px;
   background: transparent;
   color: var(--agent-text-mid);
   font: inherit;
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
+}
+
+.rail-item svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
 }
 
 .rail-item:hover {
@@ -639,13 +679,9 @@ async function retryEnsureVoice(): Promise<void> {
   color: var(--agent-text);
 }
 
-.rail-label {
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.rail-hint {
-  font-size: 11px;
+.rail-empty {
+  margin: 8px 10px 0;
+  font-size: 12px;
   color: var(--agent-text-dim);
 }
 
@@ -653,9 +689,8 @@ async function retryEnsureVoice(): Promise<void> {
   flex: 1;
   min-width: 0;
   min-height: 0;
-  margin-top: 56px;
   overflow-y: auto;
-  padding: 4px 28px 40px 36px;
+  padding: 8px 28px 28px;
 }
 
 .pane-block {

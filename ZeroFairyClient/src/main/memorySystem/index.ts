@@ -29,13 +29,14 @@ export function retrieveMemories(): string {
       .join('\n')
 }
 
-// 保存一轮对话到聊天记录
-export function saveDailogHistory(
-    session: string,
-    userText: string,
-    assistantText: string
-): void {
+/** 用户一发出去就落库，侧栏立刻有这条会话，切走也不会丢问题本身 */
+export function saveUserTurn(session: string, userText: string): void {
+    if (!session || !userText.trim()) return
     chatHistoryDb.save({ session, role: 'user', content: userText })
+}
+
+export function saveAssistantTurn(session: string, assistantText: string): void {
+    if (!session || !assistantText.trim()) return
     chatHistoryDb.save({ session, role: 'assistant', content: assistantText })
 }
 

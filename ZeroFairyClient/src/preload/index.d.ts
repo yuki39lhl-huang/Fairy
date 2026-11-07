@@ -39,6 +39,8 @@ interface Api {
   setChatPinned: (sessionId: string, pinned: boolean) => Promise<boolean>
   renameChatSession: (sessionId: string, title: string) => Promise<boolean>
   deleteChatSession: (sessionId: string) => Promise<boolean>
+  /** 用户删会话 / 新对话时作废主进程当前生成回合，避免旧事件继续锁 UI */
+  abandonChatTurn: (sessionId: string) => Promise<boolean>
   getChatMessages: (
     sessionId: string
   ) => Promise<Array<{ role: 'user' | 'assistant'; content: string }>>
